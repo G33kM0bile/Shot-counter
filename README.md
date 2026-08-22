@@ -21,9 +21,9 @@ An offline-first shot-counting proof of concept for shooting ranges. It accepts 
 
 ## Dashboard preview
 
-The screenshot shows the original LSSK proof-of-concept deployment. The public application uses generic **Shot Counter** branding and configurable range identity.
+The screenshot shows the current LSSK proof-of-concept deployment, including the experimental marker and privacy controls. The public application uses generic **Shot Counter** branding and configurable range identity.
 
-![Shot Counter dashboard showing activity, statistics, and system status](docs/images/dashboard-preview.png)
+![Current Shot Counter dashboard showing activity, statistics, uploads, and privacy controls](docs/images/dashboard-preview-current.jpg)
 
 ## Experimental status
 
