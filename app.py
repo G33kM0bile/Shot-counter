@@ -684,6 +684,16 @@ HTML = """
         margin-top: 20px;
     }
 
+    .footer a {
+        color: #8d9297;
+        text-decoration: none;
+    }
+
+    .footer a:hover {
+        color: #c5c8ca;
+        text-decoration: underline;
+    }
+
     button {
         margin-top: 20px;
         background: #31363b;
@@ -941,7 +951,13 @@ HTML = """
 
 
 <div class="footer">
-    Automatisk skuddteller
+    Automatisk skuddteller ·
+    <a
+        href="https://github.com/G33kM0bile/Shot-counter"
+        target="_blank"
+        rel="noopener noreferrer">
+        GitHub
+    </a>
 </div>
 
 </div>
