@@ -23,7 +23,7 @@ Do not use this software as a safety system, an official range log, or the sole 
 - Recording timestamps from embedded metadata, with filesystem time as a fallback.
 - Dashboard counters for today, yesterday, the last week, month, and year, plus the current calendar year and total.
 - Activity-aware statistics such as active days, average per active day, the recent busiest day, the all-time record day, and the last activity day.
-- Privacy soft reset for short-term public statistics without deleting monthly, yearly, or total source data.
+- PIN-protected privacy controls: short-term suppression, delayed aggregate publication, a 24-hour registration pause, and a manual soft reset.
 - `robots.txt`, `bots.txt`, and `X-Robots-Tag` responses that ask crawlers not to index the site.
 - Example systemd services and Nginx reverse-proxy configuration.
 - Offline processing with a documented path toward outbound-only synchronization.
@@ -50,8 +50,8 @@ Browser upload or local file transfer
           Web dashboard/API
 ```
 
-- `app.py` provides the Flask dashboard, JSON API, upload endpoint, statistics, and privacy reset.
-- `upload_processor.py` watches for completed audio files, normalizes them, detects candidate events, writes results, and moves originals to `processed/` or `failed/`.
+- `app.py` provides the Flask dashboard, JSON API, upload endpoint, statistics, and privacy controls.
+- `upload_processor.py` watches for completed audio files, honors registration pauses, normalizes audio, writes detections, and moves originals to `processed/` or `failed/`.
 - `config.example.yaml` documents paths, identity, timezone, server settings, and detector parameters.
 - `deploy/systemd/` contains service units for Debian-based systems.
 - `deploy/nginx/` contains an optional reverse-proxy example.
@@ -70,7 +70,7 @@ cp config.example.yaml config.yaml
 venv/bin/python app.py
 ```
 
-Edit `config.yaml` before starting either component so its database and upload directories exist and are writable. The sample uses system paths intended for the full Debian installation, not an unprivileged checkout.
+Edit `config.yaml` before starting either component so its database and upload directories exist and are writable. Set a private value for `admin.pin`; the example PIN is not intended for deployment. The sample uses system paths intended for the full Debian installation, not an unprivileged checkout.
 
 ## Operating modes
 
@@ -81,7 +81,9 @@ Use `simulated` only for an isolated demonstration. Never leave it enabled when 
 
 ## Security and privacy
 
-The included upload endpoint is intentionally simple and has no user authentication. `robots.txt` and `bots.txt` are crawler requests, not access controls. The privacy-reset request header is also not authentication.
+The included upload endpoint is intentionally simple and has no user authentication. Administrative privacy actions require the PIN configured under `admin.pin`, but this proof-of-concept PIN has no rate limiting and is not a replacement for proper authentication. `robots.txt` and `bots.txt` are crawler requests, not access controls.
+
+Privacy mode stores detections immediately, permanently removes them from short-term and date-specific public views, and delays their inclusion in aggregate month, year, and total counters. Registration pause rejects browser uploads and defers the processor queue; it does not control an independent external recorder unless that recorder is integrated with the same state.
 
 Before exposing an installation publicly:
 

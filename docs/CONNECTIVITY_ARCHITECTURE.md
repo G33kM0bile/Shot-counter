@@ -91,7 +91,9 @@ The system should document retention periods for original audio, processed audio
 
 ## Privacy
 
-Aggregate statistics may include all valid detections while short-term public views are suppressed when sensitive users are present. A privacy reset should affect only presentation cutoffs; it must not delete detections or interfere with synchronization and deduplication.
+Aggregate statistics may include all valid detections while short-term public views are suppressed when sensitive users are present. Privacy sessions are stored as time intervals: matching detections stay out of short-term and date-specific views permanently, while their aggregate contribution is published only after the configured delay. A privacy reset affects only the presentation cutoff; neither mechanism deletes detections or interferes with synchronization and deduplication.
+
+The registration-pause state rejects browser uploads and causes the local processor to defer queued files until the pause ends. A future microphone recorder must explicitly honor the same server-side state if audio capture itself must stop.
 
 Exact event times, recent-event tables, logs, filenames, detector identifiers, and recording metadata must not be exposed through public endpoints when the privacy cutoff is active.
 
@@ -113,5 +115,5 @@ Exact event times, recent-event tables, logs, filenames, detector identifiers, a
 - No inbound router or firewall configuration is required.
 - The range exposes no public SSH, database, detector, or management ports.
 - Revoking one device credential does not affect other devices.
-- Public privacy resets do not delete source data or change long-term totals.
+- Privacy controls do not delete source data, and delayed detections enter aggregate totals only after their publication deadline.
 

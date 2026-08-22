@@ -9,6 +9,16 @@ detector:
 database:
   path: /var/lib/shot-counter/shots.db
 
+admin:
+  # Required for privacy controls. Replace this example value.
+  pin: "change-this-pin"
+
+privacy:
+  mode_hours: 6
+  publish_delay_min_hours: 24
+  publish_delay_max_hours: 48
+  registration_pause_hours: 24
+
 api:
   # Bind to localhost when a reverse proxy such as Nginx is used.
   host: 127.0.0.1

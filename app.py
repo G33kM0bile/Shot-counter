@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import secrets
 import sqlite3
 import threading
 import time
@@ -58,6 +59,19 @@ MAX_UPLOAD_BYTES = int(
         95 * 1024 * 1024,
     )
 )
+ADMIN_PIN = str(config.get("admin", {}).get("pin", ""))
+PRIVACY_MODE_HOURS = int(
+    config.get("privacy", {}).get("mode_hours", 6)
+)
+PRIVACY_PUBLISH_MIN_HOURS = int(
+    config.get("privacy", {}).get("publish_delay_min_hours", 24)
+)
+PRIVACY_PUBLISH_MAX_HOURS = int(
+    config.get("privacy", {}).get("publish_delay_max_hours", 48)
+)
+REGISTRATION_PAUSE_HOURS = int(
+    config.get("privacy", {}).get("registration_pause_hours", 24)
+)
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
@@ -92,10 +106,33 @@ def init_db():
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dashboard_privacy_sessions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at TEXT NOT NULL,
+                ends_at TEXT NOT NULL,
+                publish_after TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dashboard_registration_pauses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at TEXT NOT NULL,
+                ends_at TEXT NOT NULL
+            )
+            """
+        )
         conn.commit()
 
 
 def add_shot(confidence=1.0, peak=1.0):
+    if registration_pause_state()["active"]:
+        print("Shot ignored because registration is paused.")
+        return False
+
     timestamp = datetime.now(timezone.utc).isoformat()
 
     with db_connect() as conn:
@@ -127,18 +164,43 @@ def add_shot(confidence=1.0, peak=1.0):
         f"peak={peak:.2f}"
     )
 
+    return True
+
 
 def shot_count():
+    now_iso = datetime.now(timezone.utc).isoformat()
+
     with db_connect() as conn:
         return conn.execute(
-            "SELECT COUNT(*) FROM shots"
+            """
+            SELECT COUNT(*)
+            FROM shots
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM dashboard_privacy_sessions AS session
+                WHERE julianday(shots.timestamp) >= julianday(session.started_at)
+                  AND julianday(shots.timestamp) < julianday(session.ends_at)
+                  AND julianday(session.publish_after) > julianday(?)
+            )
+            """,
+            (now_iso,),
         ).fetchone()[0]
 
 
 def queued_count():
     with db_connect() as conn:
         return conn.execute(
-            "SELECT COUNT(*) FROM shots WHERE uploaded = 0"
+            """
+            SELECT COUNT(*)
+            FROM shots
+            WHERE uploaded = 0
+              AND NOT EXISTS (
+                SELECT 1
+                FROM dashboard_privacy_sessions AS session
+                WHERE julianday(shots.timestamp) >= julianday(session.started_at)
+                  AND julianday(shots.timestamp) < julianday(session.ends_at)
+              )
+            """
         ).fetchone()[0]
 
 
@@ -181,6 +243,181 @@ def privacy_cutoff_payload(cutoff):
     }
 
 
+def deadline_payload(timestamp):
+    dt = format_local(timestamp)
+
+    return {
+        "iso": dt.isoformat(),
+        "date": dt.strftime("%d.%m.%Y"),
+        "time": dt.strftime("%H:%M"),
+    }
+
+
+def active_privacy_session(conn, now_iso):
+    return conn.execute(
+        """
+        SELECT id, started_at, ends_at, publish_after
+        FROM dashboard_privacy_sessions
+        WHERE julianday(started_at) <= julianday(?)
+          AND julianday(ends_at) > julianday(?)
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (now_iso, now_iso),
+    ).fetchone()
+
+
+def privacy_mode_state():
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    with db_connect() as conn:
+        row = active_privacy_session(conn, now_iso)
+
+    if not row:
+        return {"active": False}
+
+    return {
+        "active": True,
+        "started_at": deadline_payload(row["started_at"]),
+        "ends_at": deadline_payload(row["ends_at"]),
+    }
+
+
+def delayed_publish_after(session_end):
+    minimum = max(0, PRIVACY_PUBLISH_MIN_HOURS)
+    maximum = max(minimum, PRIVACY_PUBLISH_MAX_HOURS)
+    spread_seconds = (maximum - minimum) * 60 * 60
+    delay_seconds = minimum * 60 * 60
+
+    if spread_seconds:
+        delay_seconds += secrets.randbelow(spread_seconds + 1)
+
+    return session_end + timedelta(seconds=delay_seconds)
+
+
+def set_privacy_mode(enabled):
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+
+    with db_connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = active_privacy_session(conn, now_iso)
+
+        if enabled and not row:
+            ends_at = now + timedelta(hours=PRIVACY_MODE_HOURS)
+            publish_after = delayed_publish_after(ends_at)
+
+            conn.execute(
+                """
+                INSERT INTO dashboard_privacy_resets (reset_at)
+                VALUES (?)
+                """,
+                (now_iso,),
+            )
+            conn.execute(
+                """
+                INSERT INTO dashboard_privacy_sessions (
+                    started_at,
+                    ends_at,
+                    publish_after
+                )
+                VALUES (?, ?, ?)
+                """,
+                (
+                    now_iso,
+                    ends_at.isoformat(),
+                    publish_after.isoformat(),
+                ),
+            )
+        elif not enabled and row:
+            publish_after = delayed_publish_after(now)
+            conn.execute(
+                """
+                UPDATE dashboard_privacy_sessions
+                SET ends_at = ?, publish_after = ?
+                WHERE id = ?
+                """,
+                (now_iso, publish_after.isoformat(), row["id"]),
+            )
+
+        conn.commit()
+
+    return privacy_mode_state()
+
+
+def active_registration_pause(conn, now_iso):
+    return conn.execute(
+        """
+        SELECT id, started_at, ends_at
+        FROM dashboard_registration_pauses
+        WHERE julianday(started_at) <= julianday(?)
+          AND julianday(ends_at) > julianday(?)
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (now_iso, now_iso),
+    ).fetchone()
+
+
+def registration_pause_state():
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    with db_connect() as conn:
+        row = active_registration_pause(conn, now_iso)
+
+    if not row:
+        return {"active": False}
+
+    return {
+        "active": True,
+        "started_at": deadline_payload(row["started_at"]),
+        "ends_at": deadline_payload(row["ends_at"]),
+    }
+
+
+def set_registration_pause(enabled):
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+
+    with db_connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = active_registration_pause(conn, now_iso)
+
+        if enabled and not row:
+            ends_at = now + timedelta(hours=REGISTRATION_PAUSE_HOURS)
+            conn.execute(
+                """
+                INSERT INTO dashboard_registration_pauses (
+                    started_at,
+                    ends_at
+                )
+                VALUES (?, ?)
+                """,
+                (now_iso, ends_at.isoformat()),
+            )
+        elif not enabled and row:
+            conn.execute(
+                """
+                UPDATE dashboard_registration_pauses
+                SET ends_at = ?
+                WHERE id = ?
+                """,
+                (now_iso, row["id"]),
+            )
+
+        conn.commit()
+
+    return registration_pause_state()
+
+
+def valid_admin_pin():
+    supplied = request.headers.get("X-Shot-Counter-PIN", "")
+    return bool(ADMIN_PIN) and secrets.compare_digest(
+        str(supplied),
+        ADMIN_PIN,
+    )
+
+
 def record_privacy_reset():
     reset_at = datetime.now(timezone.utc).isoformat()
 
@@ -198,14 +435,25 @@ def record_privacy_reset():
 
 
 def last_shot(cutoff=None):
-    where_clause = ""
-    parameters = ()
+    conditions = [
+        """
+        NOT EXISTS (
+            SELECT 1
+            FROM dashboard_privacy_sessions AS session
+            WHERE julianday(shots.timestamp) >= julianday(session.started_at)
+              AND julianday(shots.timestamp) < julianday(session.ends_at)
+        )
+        """
+    ]
+    parameters = []
 
     if cutoff:
-        where_clause = (
-            "WHERE julianday(timestamp) >= julianday(?)"
+        conditions.append(
+            "julianday(shots.timestamp) >= julianday(?)"
         )
-        parameters = (cutoff,)
+        parameters.append(cutoff)
+
+    where_clause = "WHERE " + " AND ".join(conditions)
 
     with db_connect() as conn:
         row = conn.execute(
@@ -232,15 +480,25 @@ def last_shot(cutoff=None):
 
 
 def recent_shots(limit=10, cutoff=None):
-    where_clause = ""
+    conditions = [
+        """
+        NOT EXISTS (
+            SELECT 1
+            FROM dashboard_privacy_sessions AS session
+            WHERE julianday(shots.timestamp) >= julianday(session.started_at)
+              AND julianday(shots.timestamp) < julianday(session.ends_at)
+        )
+        """
+    ]
     parameters = []
 
     if cutoff:
-        where_clause = (
-            "WHERE julianday(timestamp) >= julianday(?)"
+        conditions.append(
+            "julianday(shots.timestamp) >= julianday(?)"
         )
         parameters.append(cutoff)
 
+    where_clause = "WHERE " + " AND ".join(conditions)
     parameters.append(limit)
 
     with db_connect() as conn:
@@ -275,16 +533,53 @@ def recent_shots(limit=10, cutoff=None):
 
 def activity_statistics(cutoff=None):
     """Return calendar-day statistics in the server's Europe/Oslo timezone."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+
     with db_connect() as conn:
         total = conn.execute(
-            "SELECT COUNT(*) FROM shots"
+            """
+            SELECT COUNT(*)
+            FROM shots
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM dashboard_privacy_sessions AS session
+                WHERE julianday(shots.timestamp) >= julianday(session.started_at)
+                  AND julianday(shots.timestamp) < julianday(session.ends_at)
+                  AND julianday(session.publish_after) > julianday(?)
+            )
+            """,
+            (now_iso,),
         ).fetchone()[0]
         rows = conn.execute(
             """
             SELECT
-                date(timestamp, 'localtime') AS activity_day,
+                date(shots.timestamp, 'localtime') AS activity_day,
                 COUNT(*) AS shot_count
             FROM shots
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM dashboard_privacy_sessions AS session
+                WHERE julianday(shots.timestamp) >= julianday(session.started_at)
+                  AND julianday(shots.timestamp) < julianday(session.ends_at)
+                  AND julianday(session.publish_after) > julianday(?)
+            )
+            GROUP BY activity_day
+            ORDER BY activity_day
+            """,
+            (now_iso,),
+        ).fetchall()
+        detail_rows = conn.execute(
+            """
+            SELECT
+                date(shots.timestamp, 'localtime') AS activity_day,
+                COUNT(*) AS shot_count
+            FROM shots
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM dashboard_privacy_sessions AS session
+                WHERE julianday(shots.timestamp) >= julianday(session.started_at)
+                  AND julianday(shots.timestamp) < julianday(session.ends_at)
+            )
             GROUP BY activity_day
             ORDER BY activity_day
             """
@@ -294,17 +589,23 @@ def activity_statistics(cutoff=None):
             short_term_rows = conn.execute(
                 """
                 SELECT
-                    date(timestamp, 'localtime') AS activity_day,
+                    date(shots.timestamp, 'localtime') AS activity_day,
                     COUNT(*) AS shot_count
                 FROM shots
-                WHERE julianday(timestamp) >= julianday(?)
+                WHERE julianday(shots.timestamp) >= julianday(?)
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM dashboard_privacy_sessions AS session
+                    WHERE julianday(shots.timestamp) >= julianday(session.started_at)
+                      AND julianday(shots.timestamp) < julianday(session.ends_at)
+                  )
                 GROUP BY activity_day
                 ORDER BY activity_day
                 """,
                 (cutoff,),
             ).fetchall()
         else:
-            short_term_rows = rows
+            short_term_rows = detail_rows
 
     def rows_to_daily_counts(source_rows):
         counts = {}
@@ -322,6 +623,7 @@ def activity_statistics(cutoff=None):
         return counts
 
     daily_counts = rows_to_daily_counts(rows)
+    detail_counts = rows_to_daily_counts(detail_rows)
     short_term_counts = rows_to_daily_counts(short_term_rows)
 
     today = datetime.now(LOCAL_TZ).date()
@@ -336,6 +638,7 @@ def activity_statistics(cutoff=None):
 
     last_7 = counts_for_last(short_term_counts, 7)
     last_30 = counts_for_last(daily_counts, 30)
+    detail_last_30 = counts_for_last(detail_counts, 30)
     last_365 = counts_for_last(daily_counts, 365)
     this_calendar_year = {
         day: count
@@ -359,9 +662,10 @@ def activity_statistics(cutoff=None):
             "shots": count,
         }
 
-    active_days_30 = len(last_30)
+    active_days_30 = len(detail_last_30)
     shots_30 = sum(last_30.values())
-    last_activity_day = max(daily_counts) if daily_counts else None
+    detail_shots_30 = sum(detail_last_30.values())
+    last_activity_day = max(detail_counts) if detail_counts else None
 
     return {
         "today": short_term_counts.get(today, 0),
@@ -375,12 +679,12 @@ def activity_statistics(cutoff=None):
         "this_calendar_year": sum(this_calendar_year.values()),
         "active_days_30": active_days_30,
         "average_per_active_day_30": (
-            round(shots_30 / active_days_30, 1)
+            round(detail_shots_30 / active_days_30, 1)
             if active_days_30
             else 0
         ),
-        "most_active_day_30": day_stat(last_30),
-        "record_day": day_stat(daily_counts),
+        "most_active_day_30": day_stat(detail_last_30),
+        "record_day": day_stat(detail_counts),
         "last_activity_day": (
             {
                 "iso": last_activity_day.isoformat(),
@@ -648,6 +952,68 @@ HTML = """
     .privacy-card button:disabled {
         cursor: wait;
         opacity: 0.65;
+    }
+
+    .admin-pin-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 18px;
+    }
+
+    .admin-pin-row label {
+        color: #aaa;
+        font-size: 14px;
+        font-weight: 600;
+    }
+
+    .admin-pin-row input {
+        width: 130px;
+        background: #111315;
+        color: #fff;
+        border: 1px solid #454b51;
+        border-radius: 8px;
+        padding: 9px 11px;
+    }
+
+    .privacy-controls {
+        display: grid;
+        gap: 14px;
+    }
+
+    .privacy-control {
+        border-top: 1px solid #292d31;
+        padding-top: 14px;
+    }
+
+    .privacy-control-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+    }
+
+    .privacy-control-description {
+        margin: 8px 0 0;
+        color: #8d9297;
+        font-size: 14px;
+        line-height: 1.5;
+    }
+
+    .toggle-button {
+        min-width: 82px;
+        white-space: nowrap;
+    }
+
+    .toggle-button.active {
+        background: #28543a;
+        border-color: #3c7a52;
+    }
+
+    .toggle-button.danger.active {
+        background: #6d3035;
+        border-color: #9a454c;
     }
 
     .upload-status {
@@ -973,19 +1339,82 @@ HTML = """
 <div class="section-title">Personvern</div>
 
 <div class="privacy-card">
-    <p class="privacy-description">
-        Nullstill korttidsvisningen. Måneds-, års- og totaltall beholdes.
-    </p>
+    <div class="admin-pin-row">
+        <label for="admin-pin">Admin-PIN</label>
+        <input
+            id="admin-pin"
+            type="password"
+            inputmode="numeric"
+            autocomplete="off"
+            placeholder="PIN">
+    </div>
 
-    <button id="privacy-reset-button" type="button">
-        Nullstill korttidsvisning
-    </button>
+    <div class="privacy-controls">
+        <div class="privacy-control">
+            <div class="privacy-control-heading">
+                <strong>Skjul korttidsaktivitet</strong>
+                <button
+                    id="privacy-mode-button"
+                    class="toggle-button"
+                    type="button"
+                    aria-pressed="false">
+                    Av
+                </button>
+            </div>
+            <p class="privacy-control-description">
+                Nye registreringer lagres, men skjules permanent fra
+                korttids- og datovisninger. Samlet aktivitet publiseres
+                i måneds-, års- og totaltall etter 24–48 timer. Modusen
+                slås automatisk av etter 6 timer.
+            </p>
+            <div
+                id="privacy-mode-status"
+                class="privacy-status"
+                role="status"
+                aria-live="polite"></div>
+        </div>
 
-    <div
-        id="privacy-reset-status"
-        class="privacy-status"
-        role="status"
-        aria-live="polite"></div>
+        <div class="privacy-control">
+            <div class="privacy-control-heading">
+                <strong>Stopp registrering</strong>
+                <button
+                    id="registration-pause-button"
+                    class="toggle-button danger"
+                    type="button"
+                    aria-pressed="false">
+                    Av
+                </button>
+            </div>
+            <p class="privacy-control-description">
+                Avviser nye nettleseropplastinger og setter behandling
+                av køen på pause. Registrering starter automatisk igjen
+                etter 24 timer.
+            </p>
+            <div
+                id="registration-pause-status"
+                class="privacy-status"
+                role="status"
+                aria-live="polite"></div>
+        </div>
+
+        <div class="privacy-control">
+            <div class="privacy-control-heading">
+                <strong>Nullstill korttidsvisningen</strong>
+                <button id="privacy-reset-button" type="button">
+                    Nullstill
+                </button>
+            </div>
+            <p class="privacy-control-description">
+                Nullstill korttidsvisningen. Måneds-, års- og totaltall
+                beholdes.
+            </p>
+            <div
+                id="privacy-reset-status"
+                class="privacy-status"
+                role="status"
+                aria-live="polite"></div>
+        </div>
+    </div>
 </div>
 
 
@@ -1024,6 +1453,9 @@ const decimalFormatter =
         }
     );
 
+const actionHeaderName =
+    "X-Shot-Counter-Action";
+
 function showDayStat(dateId, shotsId, stat) {
 
     document.getElementById(
@@ -1037,6 +1469,154 @@ function showDayStat(dateId, shotsId, stat) {
         stat
             ? `${numberFormatter.format(stat.shots)} skudd`
             : "";
+}
+
+function adminHeaders(action, pin, json = false) {
+
+    const headers = {
+        "X-Shot-Counter-PIN": pin
+    };
+
+    headers[actionHeaderName] = action;
+
+    if (json) {
+        headers["Content-Type"] = "application/json";
+    }
+
+    return headers;
+}
+
+function readAdminPin(status) {
+
+    const input =
+        document.getElementById("admin-pin");
+    const pin = input.value.trim();
+
+    if (!pin) {
+        status.className = "privacy-status error";
+        status.textContent = "Skriv inn admin-PIN.";
+        input.focus();
+        return null;
+    }
+
+    return pin;
+}
+
+function setToggleState(button, active) {
+
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+    button.textContent = active ? "På" : "Av";
+}
+
+async function togglePrivacyMode() {
+
+    const button =
+        document.getElementById("privacy-mode-button");
+    const status =
+        document.getElementById("privacy-mode-status");
+    const active =
+        button.getAttribute("aria-pressed") === "true";
+    const enabled = !active;
+    const pin = readAdminPin(status);
+
+    if (!pin) {
+        return;
+    }
+
+    const confirmed = window.confirm(
+        enabled
+            ? "Skjul korttidsaktivitet i inntil 6 timer?"
+            : "Avslutt skjuling av korttidsaktivitet?"
+    );
+
+    if (!confirmed) {
+        return;
+    }
+
+    button.disabled = true;
+    status.className = "privacy-status";
+    status.textContent = "Oppdaterer …";
+
+    try {
+        const response = await fetch(
+            "/api/privacy-mode",
+            {
+                method: "POST",
+                headers: adminHeaders("privacy-mode", pin, true),
+                body: JSON.stringify({enabled})
+            }
+        );
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || "Endringen mislyktes.");
+        }
+
+        status.className = "privacy-status success";
+        status.textContent = data.message;
+        await updateDashboard();
+    } catch (error) {
+        status.className = "privacy-status error";
+        status.textContent = error.message || "Endringen mislyktes.";
+    } finally {
+        button.disabled = false;
+    }
+}
+
+async function toggleRegistrationPause() {
+
+    const button =
+        document.getElementById("registration-pause-button");
+    const status =
+        document.getElementById("registration-pause-status");
+    const active =
+        button.getAttribute("aria-pressed") === "true";
+    const enabled = !active;
+    const pin = readAdminPin(status);
+
+    if (!pin) {
+        return;
+    }
+
+    const confirmed = window.confirm(
+        enabled
+            ? "Stopp registrering og opplasting i inntil 24 timer?"
+            : "Start registrering igjen nå?"
+    );
+
+    if (!confirmed) {
+        return;
+    }
+
+    button.disabled = true;
+    status.className = "privacy-status";
+    status.textContent = "Oppdaterer …";
+
+    try {
+        const response = await fetch(
+            "/api/registration-pause",
+            {
+                method: "POST",
+                headers: adminHeaders("registration-pause", pin, true),
+                body: JSON.stringify({enabled})
+            }
+        );
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || "Endringen mislyktes.");
+        }
+
+        status.className = "privacy-status success";
+        status.textContent = data.message;
+        await updateDashboard();
+    } catch (error) {
+        status.className = "privacy-status error";
+        status.textContent = error.message || "Endringen mislyktes.";
+    } finally {
+        button.disabled = false;
+    }
 }
 
 function uploadAudio(event) {
@@ -1062,6 +1642,7 @@ function uploadAudio(event) {
     const upload = new XMLHttpRequest();
 
     button.disabled = true;
+    button.dataset.uploading = "true";
     status.className = "upload-status";
     status.textContent = "Starter opplasting …";
 
@@ -1103,6 +1684,7 @@ function uploadAudio(event) {
             }
 
             button.disabled = false;
+            delete button.dataset.uploading;
         }
     );
 
@@ -1113,6 +1695,7 @@ function uploadAudio(event) {
             status.textContent =
                 "Kunne ikke kontakte serveren. Prøv igjen.";
             button.disabled = false;
+            delete button.dataset.uploading;
         }
     );
 
@@ -1134,6 +1717,11 @@ async function resetPrivacyDisplay() {
         document.getElementById("privacy-reset-button");
     const status =
         document.getElementById("privacy-reset-status");
+    const pin = readAdminPin(status);
+
+    if (!pin) {
+        return;
+    }
 
     button.disabled = true;
     status.className = "privacy-status";
@@ -1144,9 +1732,7 @@ async function resetPrivacyDisplay() {
             "/api/privacy-reset",
             {
                 method: "POST",
-                headers: {
-                    "X-Shot-Counter-Action": "privacy-reset"
-                }
+                headers: adminHeaders("privacy-reset", pin)
             }
         );
         const data = await response.json();
@@ -1269,6 +1855,87 @@ async function updateDashboard() {
         ).textContent =
             data.queued_uploads;
 
+        const privacyMode =
+            data.privacy_mode || {active: false};
+        const privacyModeButton =
+            document.getElementById("privacy-mode-button");
+        const privacyModeStatus =
+            document.getElementById("privacy-mode-status");
+
+        setToggleState(
+            privacyModeButton,
+            privacyMode.active
+        );
+
+        if (privacyMode.active) {
+            privacyModeStatus.className =
+                "privacy-status success";
+            privacyModeStatus.textContent =
+                `Aktiv til ${privacyMode.ends_at.date} ` +
+                `kl. ${privacyMode.ends_at.time}.`;
+        } else if (!privacyModeStatus.classList.contains("error")) {
+            privacyModeStatus.className = "privacy-status";
+            privacyModeStatus.textContent =
+                "Skjuling av korttidsaktivitet er av.";
+        }
+
+        const registrationPause =
+            data.registration_pause || {active: false};
+        const registrationPauseButton =
+            document.getElementById("registration-pause-button");
+        const registrationPauseStatus =
+            document.getElementById("registration-pause-status");
+
+        setToggleState(
+            registrationPauseButton,
+            registrationPause.active
+        );
+
+        if (registrationPause.active) {
+            registrationPauseStatus.dataset.modeState = "active";
+            registrationPauseStatus.className =
+                "privacy-status error";
+            registrationPauseStatus.textContent =
+                `Registrering er stoppet til ` +
+                `${registrationPause.ends_at.date} ` +
+                `kl. ${registrationPause.ends_at.time}.`;
+        } else if (
+            registrationPauseStatus.dataset.modeState === "active"
+            || !registrationPauseStatus.classList.contains("error")
+        ) {
+            delete registrationPauseStatus.dataset.modeState;
+            registrationPauseStatus.className = "privacy-status";
+            registrationPauseStatus.textContent =
+                "Registrering er aktiv.";
+        }
+
+        const audioInput =
+            document.getElementById("audio-file");
+        const uploadButton =
+            document.getElementById("upload-button");
+        const uploadStatus =
+            document.getElementById("upload-status");
+
+        audioInput.disabled = registrationPause.active;
+        uploadButton.disabled =
+            registrationPause.active
+            || uploadButton.dataset.uploading === "true";
+
+        if (registrationPause.active) {
+            uploadStatus.className = "upload-status error";
+            uploadStatus.textContent =
+                "Opplasting er deaktivert mens registrering er stoppet.";
+            uploadStatus.dataset.pauseMessage = "true";
+        } else if (uploadStatus.dataset.pauseMessage === "true") {
+            uploadStatus.className = "upload-status";
+            uploadStatus.textContent = "";
+            delete uploadStatus.dataset.pauseMessage;
+        }
+
+        document.getElementById(
+            "simulate-button"
+        ).disabled = registrationPause.active;
+
         const privacyStatus =
             document.getElementById("privacy-reset-status");
 
@@ -1356,6 +2023,20 @@ document.getElementById(
     resetPrivacyDisplay
 );
 
+document.getElementById(
+    "privacy-mode-button"
+).addEventListener(
+    "click",
+    togglePrivacyMode
+);
+
+document.getElementById(
+    "registration-pause-button"
+).addEventListener(
+    "click",
+    toggleRegistrationPause
+);
+
 setInterval(
     updateDashboard,
     3000
@@ -1403,6 +2084,8 @@ def bot_policy():
 def api_status():
     cutoff = privacy_cutoff()
     statistics = activity_statistics(cutoff)
+    privacy_mode = privacy_mode_state()
+    registration_pause = registration_pause_state()
 
     return jsonify(
         {
@@ -1416,12 +2099,22 @@ def api_status():
             "recent": recent_shots(10, cutoff),
             "statistics": statistics,
             "privacy_reset": privacy_cutoff_payload(cutoff),
+            "privacy_mode": privacy_mode,
+            "registration_pause": registration_pause,
         }
     )
 
 
 @app.route("/api/shot", methods=["POST"])
 def simulate_shot():
+    if registration_pause_state()["active"]:
+        return jsonify(
+            {
+                "ok": False,
+                "error": "Registrering er satt på pause.",
+            }
+        ), 423
+
     if MODE != "simulated":
         return jsonify(
             {
@@ -1445,6 +2138,14 @@ def simulate_shot():
 
 @app.route("/api/upload", methods=["POST"])
 def api_upload():
+    if registration_pause_state()["active"]:
+        return jsonify(
+            {
+                "ok": False,
+                "error": "Registrering er satt på pause. Opplasting er deaktivert.",
+            }
+        ), 423
+
     audio_file = request.files.get("audio")
 
     if audio_file is None:
@@ -1473,11 +2174,11 @@ def api_privacy_reset():
     if (
         request.headers.get("X-Shot-Counter-Action")
         != "privacy-reset"
-    ):
+    ) or not valid_admin_pin():
         return jsonify(
             {
                 "ok": False,
-                "error": "Ugyldig forespørsel.",
+                "error": "Ugyldig PIN eller forespørsel.",
             }
         ), 403
 
@@ -1488,6 +2189,72 @@ def api_privacy_reset():
             "ok": True,
             "privacy_reset": privacy_cutoff_payload(cutoff),
             "message": "Korttidsvisningen er nullstilt.",
+        }
+    )
+
+
+@app.route("/api/privacy-mode", methods=["POST"])
+def api_privacy_mode():
+    if (
+        request.headers.get("X-Shot-Counter-Action")
+        != "privacy-mode"
+    ) or not valid_admin_pin():
+        return jsonify(
+            {"ok": False, "error": "Ugyldig PIN eller forespørsel."}
+        ), 403
+
+    payload = request.get_json(silent=True) or {}
+    enabled = payload.get("enabled")
+
+    if not isinstance(enabled, bool):
+        return jsonify(
+            {"ok": False, "error": "Ugyldig modusverdi."}
+        ), 400
+
+    state = set_privacy_mode(enabled)
+
+    return jsonify(
+        {
+            "ok": True,
+            "privacy_mode": state,
+            "message": (
+                "Korttidsaktivitet skjules."
+                if state["active"]
+                else "Skjuling av korttidsaktivitet er avsluttet."
+            ),
+        }
+    )
+
+
+@app.route("/api/registration-pause", methods=["POST"])
+def api_registration_pause():
+    if (
+        request.headers.get("X-Shot-Counter-Action")
+        != "registration-pause"
+    ) or not valid_admin_pin():
+        return jsonify(
+            {"ok": False, "error": "Ugyldig PIN eller forespørsel."}
+        ), 403
+
+    payload = request.get_json(silent=True) or {}
+    enabled = payload.get("enabled")
+
+    if not isinstance(enabled, bool):
+        return jsonify(
+            {"ok": False, "error": "Ugyldig modusverdi."}
+        ), 400
+
+    state = set_registration_pause(enabled)
+
+    return jsonify(
+        {
+            "ok": True,
+            "registration_pause": state,
+            "message": (
+                "Registrering er satt på pause."
+                if state["active"]
+                else "Registrering er startet igjen."
+            ),
         }
     )
 

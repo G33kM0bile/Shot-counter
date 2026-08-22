@@ -6,6 +6,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -69,6 +70,10 @@ for directory in (
     directory.mkdir(parents=True, exist_ok=True)
 
 
+PROCESSING_LOCK = threading.Lock()
+PROCESSING_PATHS = set()
+
+
 def db_connect():
     conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
@@ -103,7 +108,35 @@ def init_db():
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dashboard_registration_pauses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at TEXT NOT NULL,
+                ends_at TEXT NOT NULL
+            )
+            """
+        )
         conn.commit()
+
+
+def registration_paused():
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    with db_connect() as conn:
+        row = conn.execute(
+            """
+            SELECT id
+            FROM dashboard_registration_pauses
+            WHERE julianday(started_at) <= julianday(?)
+              AND julianday(ends_at) > julianday(?)
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (now_iso, now_iso),
+        ).fetchone()
+
+    return row is not None
 
 
 def sha256_file(path):
@@ -455,6 +488,30 @@ def eligible_file(path):
 def process_file(path):
     path = Path(path)
 
+    try:
+        path_key = str(path.resolve())
+    except OSError:
+        return
+
+    with PROCESSING_LOCK:
+        if path_key in PROCESSING_PATHS:
+            return
+
+        PROCESSING_PATHS.add(path_key)
+
+    try:
+        if registration_paused():
+            return
+
+        process_file_once(path)
+    finally:
+        with PROCESSING_LOCK:
+            PROCESSING_PATHS.discard(path_key)
+
+
+def process_file_once(path):
+    path = Path(path)
+
     if not eligible_file(path):
         return
 
@@ -462,6 +519,10 @@ def process_file(path):
 
     if not wait_until_stable(path):
         print(f"Upload disappeared before completion: {path}", flush=True)
+        return
+
+    if registration_paused():
+        print(f"Registration paused; deferring {path.name}", flush=True)
         return
 
     work_wav = WORK_DIR / (
@@ -486,6 +547,10 @@ def process_file(path):
         normalize_audio(path, work_wav)
 
         events, threshold, sample_rate = detect_events(work_wav)
+
+        if registration_paused():
+            print(f"Registration paused; deferring {path.name}", flush=True)
+            return
 
         stored = store_results(
             source_name=path.name,
@@ -592,6 +657,7 @@ def main():
     try:
         while True:
             time.sleep(SCAN_INTERVAL)
+            initial_scan()
     except KeyboardInterrupt:
         pass
     finally:

@@ -107,6 +107,8 @@ At minimum, review:
 - `detector.name`
 - `detector.range`
 - `detector.mode`
+- `admin.pin` (replace the example value)
+- the durations under `privacy`
 - all database and upload paths
 - the audio detection parameters under `processing`
 
@@ -216,7 +218,10 @@ Before publishing the site, add authentication or an access gateway to:
 
 - `POST /api/upload`
 - `POST /api/privacy-reset`
-- any future administrative endpoint
+- `POST /api/privacy-mode`
+- `POST /api/registration-pause`
+
+The configured admin PIN protects the three administrative actions from casual use, but it is intentionally lightweight and has no built-in rate limiting.
 
 Also configure rate limits, upload quotas, TLS, log retention, and an audio retention policy. The included bot policies discourage indexing but do not make a site private.
 
