@@ -119,3 +119,7 @@ Before exposing an installation publicly:
 
 Do not add live `config.yaml` files, SQLite databases, audio recordings, access tokens, SSH keys, logs, or host-specific credentials to the repository. The supplied `.gitignore` excludes the common local forms of these files.
 
+## License
+
+This project is available under the permissive [MIT License](LICENSE). Most of the proof-of-concept code was "vibe coded" with OpenAI Codex and ChatGPT, with human direction, review, testing, and deployment.
+

@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+
+"""Shot Counter web dashboard and API.
+
+Most of this proof of concept was "vibe coded" with OpenAI Codex and
+ChatGPT, with human direction, review, testing, and deployment.
+
+Project source: https://github.com/G33kM0bile/Shot-counter
+License: MIT; see the LICENSE file in the project repository.
+"""
 
 import os
 import secrets
