@@ -4,6 +4,10 @@ An offline-first shot-counting proof of concept for shooting ranges. It accepts 
 
 > **Project origin:** This project was initially created for [Lofoten Sportsskytterklubb (LSSK)](https://lssk.no/).
 
+## Dashboard preview
+
+![Shot Counter dashboard showing activity, statistics, and system status](docs/images/dashboard-preview.png)
+
 ## Important status
 
 The current detector is experimental. It uses short-window audio energy and event clustering; it is not a trained firearm classifier. It must be calibrated and validated with recordings from the intended range, microphone placement, firearms, and background conditions.
