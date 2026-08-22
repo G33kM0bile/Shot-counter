@@ -944,7 +944,8 @@ HTML = """
 
 <div class="upload-card">
     <p class="upload-description">
-        Last opp et opptak, så blir det automatisk analysert og lagt til i statistikken.
+        Last opp et lydopptak – det blir automatisk analysert og lagt til i statistikken.
+        <br>
         Støttede formater: WAV, M4A, MP3 og AAC. Maks 95 MB.
     </p>
 
