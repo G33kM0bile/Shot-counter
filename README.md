@@ -66,7 +66,7 @@ cp config.example.yaml config.yaml
 venv/bin/python app.py
 ```
 
-Edit `config.yaml` before running the processor so its database and upload directories exist and are writable.
+Edit `config.yaml` before starting either component so its database and upload directories exist and are writable. The sample uses system paths intended for the full Debian installation, not an unprivileged checkout.
 
 ## Operating modes
 

@@ -1,7 +1,5 @@
 # Shot Counter: Connectivity and Deployment Architecture
 
-> **Project origin:** This project was initially created for [Lofoten Sportsskytterklubb (LSSK)](https://lssk.no/).
-
 ## Purpose
 
 The shot-counter system must continue working if internet service becomes available at the range but the club cannot administer the local router or firewall. The design must therefore require no inbound ports, port forwarding, public IP address, or firewall exception at the range.
@@ -116,5 +114,4 @@ Exact event times, recent-event tables, logs, filenames, detector identifiers, a
 - The range exposes no public SSH, database, detector, or management ports.
 - Revoking one device credential does not affect other devices.
 - Public privacy resets do not delete source data or change long-term totals.
-
 

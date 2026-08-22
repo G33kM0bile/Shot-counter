@@ -43,6 +43,7 @@ ffprobe -version
 sudo adduser \
   --system \
   --group \
+  --no-create-home \
   --home /opt/shot-counter \
   shot-counter
 
@@ -72,7 +73,7 @@ sudo git clone \
 sudo chown -R shot-counter:shot-counter /opt/shot-counter
 ```
 
-If the target directory was created in step 2 and Git refuses to clone into it, clone into a temporary empty directory and copy the checkout into `/opt/shot-counter`, or remove only the empty target after verifying it contains no data.
+Git accepts the existing target created in step 2 because it is empty. If the directory is not empty, inspect its contents and preserve any existing data before choosing a different checkout location.
 
 ## 4. Create the Python environment
 
