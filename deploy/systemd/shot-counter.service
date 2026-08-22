@@ -1,0 +1,27 @@
+[Unit]
+Description=Shot Counter dashboard
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=shot-counter
+Group=shot-counter
+WorkingDirectory=/opt/shot-counter
+Environment=PYTHONUNBUFFERED=1
+Environment=SHOT_COUNTER_CONFIG=/opt/shot-counter/config.yaml
+ExecStart=/opt/shot-counter/venv/bin/python /opt/shot-counter/app.py
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+
+# Basic systemd hardening. The listed paths remain writable by the service.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/shot-counter /srv/shot-counter /var/cache/shot-counter
+
+[Install]
+WantedBy=multi-user.target
+

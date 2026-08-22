@@ -1,0 +1,7 @@
+Flask
+numpy
+PyYAML
+soundfile
+tzdata
+watchdog
+

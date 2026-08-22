@@ -1,119 +1,101 @@
-# Shot Counter: Connectivity and Deployment Architecture
+# Shot Counter
+
+An offline-first shot-counting proof of concept for shooting ranges. It accepts uploaded audio recordings, detects impulse-like acoustic events, stores detections in SQLite, and presents activity statistics in a lightweight web dashboard.
 
 > **Project origin:** This project was initially created for [Lofoten Sportsskytterklubb (LSSK)](https://lssk.no/).
 
-## Purpose
+## Important status
 
-The shot-counter system must continue working if internet service becomes available at the range but the club cannot administer the local router or firewall. The design must therefore require no inbound ports, port forwarding, public IP address, or firewall exception at the range.
+The current detector is experimental. It uses short-window audio energy and event clustering; it is not a trained firearm classifier. It must be calibrated and validated with recordings from the intended range, microphone placement, firearms, and background conditions.
 
-The range installation should be treated as an offline-capable edge device. It records and processes detections locally, then initiates secure outbound synchronization whenever connectivity is available.
+Do not use this software as a safety system, an official range log, or the sole basis for compliance, billing, or enforcement decisions.
 
-## Design principles
+## Features
 
-- **Outbound connections only.** Every connection from the range is initiated by the range device over standard HTTPS.
-- **Offline-first operation.** Detection and local storage continue without internet access.
-- **Store and forward.** Unsynchronized records remain in a local SQLite queue until the central service acknowledges them.
-- **Idempotent synchronization.** Retrying an upload or event must never create duplicate shots.
-- **Minimal exposure.** SQLite, SSH, the detector, and its local management interface are never exposed directly to the public internet.
-- **Central public dashboard.** The public website remains on centrally managed infrastructure and does not depend on inbound access to the range.
-- **Privacy-aware presentation.** Fine-grained public statistics can be soft-reset without deleting data used by aggregate monthly, yearly, and total counters.
+- SQLite is the local source of truth.
+- Browser uploads for WAV, M4A, MP3, and AAC recordings.
+- FFmpeg normalization to mono 48 kHz WAV before analysis.
+- SHA-256 deduplication so the same recording is not counted twice.
+- Recording timestamps from embedded metadata, with filesystem time as a fallback.
+- Dashboard counters for today, yesterday, the last week, month, and year, plus the current calendar year and total.
+- Activity-aware statistics such as active days, average per active day, the recent busiest day, the all-time record day, and the last activity day.
+- Privacy soft reset for short-term public statistics without deleting monthly, yearly, or total source data.
+- `robots.txt`, `bots.txt`, and `X-Robots-Tag` responses that ask crawlers not to index the site.
+- Example systemd services and Nginx reverse-proxy configuration.
+- Offline processing with a documented path toward outbound-only synchronization.
 
-## Recommended topology
+## Components
 
 ```text
-Microphone / recorder
-        |
-        v
-Range detector and local processor
-        |
-        +--> Local SQLite source and synchronization queue
-        |
-        +--> Outbound HTTPS synchronization
-                    |
-                    v
-        Central ingestion service
-                    |
-                    +--> Central database
-                    |
-                    +--> Public statistics dashboard
+Browser upload or local file transfer
+                 |
+                 v
+       uploads/incoming directory
+                 |
+                 v
+       upload_processor.py
+       FFmpeg + event detection
+                 |
+                 v
+              SQLite
+                 |
+                 v
+              app.py
+                 |
+                 v
+          Web dashboard/API
 ```
 
-The public dashboard must never connect back to the range. The range device pushes data outward when it can reach the central service.
+- `app.py` provides the Flask dashboard, JSON API, upload endpoint, statistics, and privacy reset.
+- `upload_processor.py` watches for completed audio files, normalizes them, detects candidate events, writes results, and moves originals to `processed/` or `failed/`.
+- `config.example.yaml` documents paths, identity, timezone, server settings, and detector parameters.
+- `deploy/systemd/` contains service units for Debian-based systems.
+- `deploy/nginx/` contains an optional reverse-proxy example.
+- [`docs/INSTALL.md`](docs/INSTALL.md) provides the complete installation procedure.
+- [`docs/CONNECTIVITY_ARCHITECTURE.md`](docs/CONNECTIVITY_ARCHITECTURE.md) describes offline-first and outbound-only deployment options.
 
-## Connectivity options
+## Quick start
 
-### Primary recommendation: outbound HTTPS synchronization
+For Debian 13, follow the [installation guide](docs/INSTALL.md). The short version is:
 
-The detector periodically sends signed event batches to a central HTTPS endpoint. This is the smallest and most portable solution because outbound HTTPS normally works on guest networks, carrier-grade NAT, and networks where the club has no router access.
+```bash
+sudo apt install python3 python3-venv ffmpeg libsndfile1
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
+cp config.example.yaml config.yaml
+venv/bin/python app.py
+```
 
-Each range device should receive its own revocable credential. Requests should include a stable event identifier, detector identifier, recording timestamp, confidence data, and any required integrity metadata.
+Edit `config.yaml` before running the processor so its database and upload directories exist and are writable.
 
-### Cloudflare Tunnel
+## Operating modes
 
-Cloudflare Tunnel can publish a local administrative or ingestion service through an outbound connection without opening inbound ports. It is useful when a centrally managed service must reach an application running at the range.
+- `uploaded`: process uploaded recordings; the simulation endpoint is disabled.
+- `simulated`: add a test detection every 30 seconds and expose the dashboard's simulation button.
 
-For the normal shot-event flow, direct outbound synchronization is still preferable: it keeps the range device independent of a continuously available tunnel and makes offline queuing explicit.
+Use `simulated` only for an isolated demonstration. Never leave it enabled when collecting real statistics.
 
-### Tailscale
+## Security and privacy
 
-Tailscale is suitable for private administration between trusted devices. It can provide SSH or private web access without port forwarding. It should complement the synchronization API rather than become a requirement for ordinary shot processing.
+The included upload endpoint is intentionally simple and has no user authentication. `robots.txt` and `bots.txt` are crawler requests, not access controls. The privacy-reset request header is also not authentication.
 
-## Offline synchronization
+Before exposing an installation publicly:
 
-Every locally recorded event should have a unique immutable identifier. A synchronization cycle should:
+- put the Flask app behind Nginx, a tunnel, or another managed reverse proxy;
+- add authentication or an access gateway to uploads and administrative actions;
+- add rate limits and storage quotas;
+- review audio retention, because recordings may contain conversations or other sensitive sound;
+- keep SQLite, SSH, and the Flask development server off the public internet;
+- use TLS for every public connection.
 
-1. Select a bounded batch of unsynchronized events from SQLite.
-2. Send the batch to the central HTTPS endpoint.
-3. Let the server insert only event identifiers it has not already accepted.
-4. Return acknowledgements for stored and previously known events.
-5. Mark acknowledged local rows as synchronized in one SQLite transaction.
-6. Retry unacknowledged rows later with exponential backoff.
+## Known limitations
 
-This pattern allows connections to fail at any point without losing events or counting a shot twice.
+- The detector may count non-shot impulses and miss quieter shots.
+- Different firearms and room acoustics require calibration data.
+- The application currently embeds the Norwegian dashboard template in `app.py`.
+- The built-in Flask server is suitable for this proof of concept, but a production deployment should use a hardened WSGI server and authenticated administrative routes.
 
-Audio uploads should use the same principle. A content hash identifies duplicate recordings, and files remain local until the central service confirms receipt or processing.
+## Data that must not be committed
 
-## Security boundaries
-
-- Use TLS for all synchronization traffic.
-- Give every detector a separate, revocable credential.
-- Prefer short-lived tokens or mutual TLS when operationally practical.
-- Do not embed infrastructure administrator credentials in the detector.
-- Restrict the central ingestion endpoint to the minimum required operations.
-- Validate request size, schema, timestamps, detector identity, and event identifiers.
-- Apply server-side rate limits and retain an audit trail of rejected requests.
-- Keep the detector, SQLite database, and processing tools unreachable from the public internet.
-- Use a private overlay such as Tailscale for maintenance access.
-
-## Data ownership
-
-While offline, the range SQLite database is the authoritative source for unsynchronized detections. After acknowledgement, the central database becomes the source used by the public dashboard, while the range retains enough history for recovery and auditing.
-
-The system should document retention periods for original audio, processed audio, failed uploads, event metadata, and synchronization logs.
-
-## Privacy
-
-Aggregate statistics may include all valid detections while short-term public views are suppressed when sensitive users are present. A privacy reset should affect only presentation cutoffs; it must not delete detections or interfere with synchronization and deduplication.
-
-Exact event times, recent-event tables, logs, filenames, detector identifiers, and recording metadata must not be exposed through public endpoints when the privacy cutoff is active.
-
-## Suggested rollout
-
-1. Keep the current local detector, SQLite database, upload processor, and dashboard operational.
-2. Add stable event identifiers and a synchronization-state field to local records.
-3. Implement a central authenticated batch-ingestion endpoint with idempotent inserts.
-4. Add an outbound synchronization worker with durable retry behavior.
-5. Test extended offline operation, interrupted uploads, duplicate batches, clock errors, and reconnection.
-6. Add Tailscale for private maintenance if needed.
-7. Add Cloudflare Tunnel only for services that genuinely require centrally initiated access.
-
-## Acceptance criteria
-
-- The detector counts and stores shots with no internet connection.
-- Reconnection synchronizes all pending events automatically.
-- Repeated synchronization never creates duplicates.
-- No inbound router or firewall configuration is required.
-- The range exposes no public SSH, database, detector, or management ports.
-- Revoking one device credential does not affect other devices.
-- Public privacy resets do not delete source data or change long-term totals.
+Do not add live `config.yaml` files, SQLite databases, audio recordings, access tokens, SSH keys, logs, or host-specific credentials to the repository. The supplied `.gitignore` excludes the common local forms of these files.
 

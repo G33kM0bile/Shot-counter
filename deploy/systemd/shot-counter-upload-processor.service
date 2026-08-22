@@ -1,0 +1,26 @@
+[Unit]
+Description=Shot Counter audio upload processor
+Wants=network-online.target
+After=network-online.target shot-counter.service
+
+[Service]
+Type=simple
+User=shot-counter
+Group=shot-counter
+WorkingDirectory=/opt/shot-counter
+Environment=PYTHONUNBUFFERED=1
+Environment=SHOT_COUNTER_CONFIG=/opt/shot-counter/config.yaml
+ExecStart=/opt/shot-counter/venv/bin/python /opt/shot-counter/upload_processor.py
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/shot-counter /srv/shot-counter /var/cache/shot-counter
+
+[Install]
+WantedBy=multi-user.target
+

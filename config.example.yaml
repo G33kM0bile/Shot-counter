@@ -1,0 +1,31 @@
+timezone: Europe/Oslo
+
+detector:
+  name: range-detector-01
+  range: main-range
+  # Use "uploaded" for real audio files or "simulated" for a demo shot every 30 seconds.
+  mode: uploaded
+
+database:
+  path: /var/lib/shot-counter/shots.db
+
+api:
+  # Bind to localhost when a reverse proxy such as Nginx is used.
+  host: 127.0.0.1
+  port: 8080
+
+uploads:
+  root: /srv/shot-counter
+  incoming: /srv/shot-counter/incoming
+  max_bytes: 99614720
+
+processing:
+  work_dir: /var/cache/shot-counter
+  scan_interval_seconds: 5
+  stable_checks: 3
+  stable_delay_seconds: 2
+  rms_window_ms: 10
+  threshold_multiplier: 15
+  minimum_threshold: 0.02
+  cluster_gap_ms: 300
+
