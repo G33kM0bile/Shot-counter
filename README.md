@@ -1,8 +1,10 @@
-# LSSK Shot Counter: Connectivity and Deployment Architecture
+# Shot Counter: Connectivity and Deployment Architecture
+
+> **Project origin:** This project was initially created for [Lofoten Sportsskytterklubb (LSSK)](https://lssk.no/).
 
 ## Purpose
 
-The LSSK shot-counter system must continue working if internet service becomes available at the range but the club cannot administer the local router or firewall. The design must therefore require no inbound ports, port forwarding, public IP address, or firewall exception at the range.
+The shot-counter system must continue working if internet service becomes available at the range but the club cannot administer the local router or firewall. The design must therefore require no inbound ports, port forwarding, public IP address, or firewall exception at the range.
 
 The range installation should be treated as an offline-capable edge device. It records and processes detections locally, then initiates secure outbound synchronization whenever connectivity is available.
 
@@ -29,7 +31,7 @@ Range detector and local processor
         +--> Outbound HTTPS synchronization
                     |
                     v
-        Central LSSK ingestion service
+        Central ingestion service
                     |
                     +--> Central database
                     |
