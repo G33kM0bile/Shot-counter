@@ -89,6 +89,7 @@ Edit `config.yaml` before starting either component so its database and upload d
 
 - `uploaded`: process uploaded recordings; the simulation endpoint is disabled.
 - `simulated`: add a test detection every 30 seconds and expose the dashboard's simulation button.
+- **Automatic recording** *(planned, not implemented)*: capture audio from a locally connected microphone and feed recordings into the same offline processing and statistics pipeline without requiring manual uploads.
 
 Use `simulated` only for an isolated demonstration. Never leave it enabled when collecting real statistics.
 
