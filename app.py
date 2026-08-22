@@ -1103,7 +1103,7 @@ HTML = """
         margin-top: 20px;
     }
 
-    .footer-disclaimer {
+    .range-tool-caveat {
         max-width: 760px;
         margin: 0 auto 10px;
         color: #8d9297;
@@ -1444,7 +1444,7 @@ HTML = """
 
 
 <div class="footer">
-    <div class="footer-disclaimer">
+    <div class="range-tool-caveat">
         Dette er et eksperimentelt verktøy for læring og uformell
         statistikk. Det kan telle feil og er ikke en offisiell
         skuddlogg. Skal ikke brukes som sikkerhetssystem eller som
