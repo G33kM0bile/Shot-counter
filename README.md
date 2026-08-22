@@ -4,11 +4,28 @@ An offline-first shot-counting proof of concept for shooting ranges. It accepts 
 
 > **Project origin:** This project was initially created for [Lofoten Sportsskytterklubb (LSSK)](https://lssk.no/).
 
+## Features
+
+- SQLite is the local source of truth.
+- Browser uploads for WAV, M4A, MP3, and AAC recordings.
+- FFmpeg normalization to mono 48 kHz WAV before analysis.
+- SHA-256 deduplication so the same recording is not counted twice.
+- Recording timestamps from embedded metadata, with filesystem time as a fallback.
+- Dashboard counters for today, yesterday, the last week, month, and year, plus the current calendar year and total.
+- Activity-aware statistics such as active days, average per active day, the recent busiest day, the all-time record day, and the last activity day.
+- PIN-protected privacy controls: short-term suppression, delayed aggregate publication, a 24-hour registration pause, and a manual soft reset.
+- Automatic expiry and an amber dashboard state for active privacy controls.
+- `robots.txt`, `bots.txt`, and `X-Robots-Tag` responses that ask crawlers not to index the site.
+- Example systemd services and Nginx reverse-proxy configuration.
+- Offline processing with a documented path toward outbound-only synchronization.
+
 ## Dashboard preview
+
+The screenshot shows the original LSSK proof-of-concept deployment. The public application uses generic **Shot Counter** branding and configurable range identity.
 
 ![Shot Counter dashboard showing activity, statistics, and system status](docs/images/dashboard-preview.png)
 
-## Important status
+## Experimental status
 
 The current detector is experimental. It uses short-window audio energy and event clustering; it is not a trained firearm classifier. It must be calibrated and validated with recordings from the intended range, microphone placement, firearms, and background conditions.
 
@@ -26,20 +43,6 @@ The dashboard includes PIN-protected controls for sessions where publishing imme
 - **PIN protection:** changing a privacy control or performing a soft reset requires the administrator PIN configured locally in `config.yaml`. No deployment PIN or other secret is included in this repository.
 
 These controls reduce immediate visibility and make activity patterns less precise; they do not provide formal anonymization. The registration pause controls this application's uploads and processing queue, not an independent recorder unless it is integrated with the same state.
-
-## Features
-
-- SQLite is the local source of truth.
-- Browser uploads for WAV, M4A, MP3, and AAC recordings.
-- FFmpeg normalization to mono 48 kHz WAV before analysis.
-- SHA-256 deduplication so the same recording is not counted twice.
-- Recording timestamps from embedded metadata, with filesystem time as a fallback.
-- Dashboard counters for today, yesterday, the last week, month, and year, plus the current calendar year and total.
-- Activity-aware statistics such as active days, average per active day, the recent busiest day, the all-time record day, and the last activity day.
-- PIN-protected privacy controls: short-term suppression, delayed aggregate publication, a 24-hour registration pause, and a manual soft reset.
-- `robots.txt`, `bots.txt`, and `X-Robots-Tag` responses that ask crawlers not to index the site.
-- Example systemd services and Nginx reverse-proxy configuration.
-- Offline processing with a documented path toward outbound-only synchronization.
 
 ## Components
 
@@ -71,33 +74,42 @@ Browser upload or local file transfer
 - [`docs/INSTALL.md`](docs/INSTALL.md) provides the complete installation procedure.
 - [`docs/CONNECTIVITY_ARCHITECTURE.md`](docs/CONNECTIVITY_ARCHITECTURE.md) describes offline-first and outbound-only deployment options.
 
-## Quick start
+## Installation
 
-For Debian 13, follow the [installation guide](docs/INSTALL.md). The short version is:
+For a persistent Debian 13 installation, follow the complete [installation guide](docs/INSTALL.md). It covers the service account, writable data directories, configuration, systemd services, upload testing, Nginx, updates, and troubleshooting.
+
+For a local code-level evaluation:
 
 ```bash
+git clone https://github.com/G33kM0bile/Shot-counter.git
+cd Shot-counter
+sudo apt update
 sudo apt install python3 python3-venv ffmpeg libsndfile1
 python3 -m venv venv
 venv/bin/pip install -r requirements.txt
 cp config.example.yaml config.yaml
+# Edit config.yaml: use writable local paths and set a private admin.pin.
 venv/bin/python app.py
 ```
 
-Edit `config.yaml` before starting either component so its database and upload directories exist and are writable. Set a private value for `admin.pin`; the example PIN is not intended for deployment. The sample uses system paths intended for the full Debian installation, not an unprivileged checkout.
+The example configuration uses system paths intended for the full Debian installation. Change the database, upload, and processing paths before running it as an unprivileged user. Start `venv/bin/python upload_processor.py` in a second terminal if you also want uploaded files to be analyzed.
 
 ## Operating modes
 
+Implemented:
+
 - `uploaded`: process uploaded recordings; the simulation endpoint is disabled.
 - `simulated`: add a test detection every 30 seconds and expose the dashboard's simulation button.
+
+Planned:
+
 - **Automatic recording** *(planned, not implemented)*: capture audio from a locally connected microphone and feed recordings into the same offline processing and statistics pipeline without requiring manual uploads.
 
 Use `simulated` only for an isolated demonstration. Never leave it enabled when collecting real statistics.
 
-## Security and privacy
+## Deployment and security
 
 The included upload endpoint is intentionally simple and has no user authentication. Administrative privacy actions require the PIN configured under `admin.pin`, but this proof-of-concept PIN has no rate limiting and is not a replacement for proper authentication. `robots.txt` and `bots.txt` are crawler requests, not access controls.
-
-Privacy mode stores detections immediately, permanently removes them from short-term and date-specific public views, and delays their inclusion in aggregate month, year, and total counters. Registration pause rejects browser uploads and defers the processor queue; it does not control an independent external recorder unless that recorder is integrated with the same state.
 
 Before exposing an installation publicly:
 
