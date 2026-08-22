@@ -693,6 +693,13 @@ HTML = """
         margin-top: 20px;
     }
 
+    .footer-disclaimer {
+        max-width: 760px;
+        margin: 0 auto 10px;
+        color: #8d9297;
+        line-height: 1.5;
+    }
+
     .footer a {
         color: #8d9297;
         text-decoration: none;
@@ -960,13 +967,21 @@ HTML = """
 
 
 <div class="footer">
-    Automatisk skuddteller ·
-    <a
-        href="https://github.com/G33kM0bile/Shot-counter"
-        target="_blank"
-        rel="noopener noreferrer">
-        GitHub
-    </a>
+    <div class="footer-disclaimer">
+        Dette er et eksperimentelt verktøy for læring og uformell
+        statistikk. Det kan telle feil og er ikke en offisiell
+        skuddlogg. Skal ikke brukes som sikkerhetssystem eller som
+        grunnlag for kontroll, fakturering eller myndighetskrav.
+    </div>
+    <div>
+        Automatisk skuddteller ·
+        <a
+            href="https://github.com/G33kM0bile/Shot-counter"
+            target="_blank"
+            rel="noopener noreferrer">
+            GitHub
+        </a>
+    </div>
 </div>
 
 </div>
