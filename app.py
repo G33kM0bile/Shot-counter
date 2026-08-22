@@ -973,9 +973,7 @@ HTML = """
 
 <div class="privacy-card">
     <p class="privacy-description">
-        Nullstill korttidsvisningen uten å slette registrerte skudd.
-        I dag, I går, Siste uken, Siste skudd og Siste registreringer
-        starter på nytt. Måneds-, års- og totaltall beholdes.
+        Nullstill korttidsvisningen. Måneds-, års- og totaltall beholdes.
     </p>
 
     <button id="privacy-reset-button" type="button">
