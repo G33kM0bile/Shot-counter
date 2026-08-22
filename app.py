@@ -489,12 +489,34 @@ HTML = """
     }
 
     .counter {
+        position: relative;
+        overflow: hidden;
         background: #191c1f;
         border: 1px solid #292d31;
         border-radius: 18px;
         padding: 35px 20px;
         text-align: center;
         margin-bottom: 20px;
+    }
+
+    .experimental-ribbon {
+        position: absolute;
+        top: 24px;
+        right: -46px;
+        width: 180px;
+        padding: 8px 0;
+        transform: rotate(45deg);
+        background: linear-gradient(135deg, #9f2731, #c63d45);
+        border-top: 1px solid rgba(255, 255, 255, 0.16);
+        border-bottom: 1px solid rgba(0, 0, 0, 0.28);
+        box-shadow: 0 5px 14px rgba(0, 0, 0, 0.28);
+        color: #fff;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 1.2px;
+        line-height: 1;
+        pointer-events: none;
+        z-index: 1;
     }
 
     .counter-number {
@@ -740,6 +762,8 @@ HTML = """
 
 
 <div class="counter">
+
+    <div class="experimental-ribbon">Experimental</div>
 
     <div
         id="shots-total"
