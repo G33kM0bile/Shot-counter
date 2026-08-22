@@ -10,7 +10,14 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import yaml
-from flask import Flask, Response, jsonify, render_template_string, request
+from flask import (
+    Flask,
+    Response,
+    jsonify,
+    render_template_string,
+    request,
+    send_from_directory,
+)
 from werkzeug.utils import secure_filename
 
 
@@ -437,6 +444,8 @@ HTML = """
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex, nofollow, noarchive">
+<link rel="icon" type="image/png" href="/static/favicon.png">
+<link rel="apple-touch-icon" href="/static/favicon.png">
 
 <title>Shot Counter</title>
 
@@ -1324,6 +1333,15 @@ setInterval(
 @app.route("/")
 def dashboard():
     return render_template_string(HTML)
+
+
+@app.route("/favicon.ico")
+def favicon():
+    return send_from_directory(
+        app.static_folder,
+        "favicon.png",
+        mimetype="image/png",
+    )
 
 
 @app.after_request
