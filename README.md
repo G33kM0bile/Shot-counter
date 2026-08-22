@@ -14,6 +14,19 @@ The current detector is experimental. It uses short-window audio energy and even
 
 Do not use this software as a safety system, an official range log, or the sole basis for compliance, billing, or enforcement decisions.
 
+## Privacy focused
+
+The dashboard includes PIN-protected controls for sessions where publishing immediate activity could reveal more than the range wants to share:
+
+- **Hide short-term activity:** activates privacy mode for up to six hours. New detections are stored, but are permanently excluded from today, yesterday, last-week, recent-registration, last-shot, and other date-specific public views.
+- **Delay long-term statistics:** detections made during privacy mode are added to month, year, calendar-year, and total aggregates only after a randomized 24–48 hour delay, making individual sessions harder to infer from counter changes.
+- **Pause registration:** rejects new browser uploads and pauses processing of the upload queue for up to 24 hours. Queued recordings remain available for processing after the pause expires or is switched off.
+- **Soft reset:** clears the public short-term view without deleting detections or changing month, year, calendar-year, and total aggregates.
+- **Automatic expiry and visible state:** privacy mode and registration pause turn themselves off automatically. The System card changes to amber `PERSONVERN` or `PAUSE` and shows the expiry time; if both controls are active, it shows both deadlines.
+- **PIN protection:** changing a privacy control or performing a soft reset requires the administrator PIN configured locally in `config.yaml`. No deployment PIN or other secret is included in this repository.
+
+These controls reduce immediate visibility and make activity patterns less precise; they do not provide formal anonymization. The registration pause controls this application's uploads and processing queue, not an independent recorder unless it is integrated with the same state.
+
 ## Features
 
 - SQLite is the local source of truth.
