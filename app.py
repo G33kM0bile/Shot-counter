@@ -891,6 +891,18 @@ HTML = """
         color: #5bd66f;
     }
 
+    .status-warning {
+        color: #d0a646;
+    }
+
+    .offline {
+        color: #ff7b72;
+    }
+
+    .status-detail {
+        white-space: pre-line;
+    }
+
     .table-card {
         background: #191c1f;
         border: 1px solid #292d31;
@@ -1237,6 +1249,9 @@ HTML = """
             class="card-value online">
             -
         </div>
+        <div
+            id="status-detail"
+            class="card-detail status-detail"></div>
     </div>
 
 
@@ -1909,6 +1924,42 @@ async function updateDashboard() {
                 "Registrering er aktiv.";
         }
 
+        const systemStatus =
+            document.getElementById("status");
+        const systemStatusDetail =
+            document.getElementById("status-detail");
+        const statusDetails = [];
+
+        systemStatus.className = "card-value";
+
+        if (registrationPause.active) {
+            systemStatus.textContent = "PAUSE";
+            systemStatus.classList.add("status-warning");
+            statusDetails.push(
+                `Registrering til ${registrationPause.ends_at.date} ` +
+                `kl. ${registrationPause.ends_at.time}`
+            );
+
+            if (privacyMode.active) {
+                statusDetails.push(
+                    `Personvern til ${privacyMode.ends_at.date} ` +
+                    `kl. ${privacyMode.ends_at.time}`
+                );
+            }
+        } else if (privacyMode.active) {
+            systemStatus.textContent = "PERSONVERN";
+            systemStatus.classList.add("status-warning");
+            statusDetails.push(
+                `Til ${privacyMode.ends_at.date} ` +
+                `kl. ${privacyMode.ends_at.time}`
+            );
+        } else {
+            systemStatus.textContent = data.status.toUpperCase();
+            systemStatus.classList.add("online");
+        }
+
+        systemStatusDetail.textContent = statusDetails.join("\\n");
+
         const audioInput =
             document.getElementById("audio-file");
         const uploadButton =
@@ -1985,10 +2036,10 @@ async function updateDashboard() {
 
     } catch (error) {
 
-        document.getElementById(
-            "status"
-        ).textContent =
-            "OFFLINE";
+        const status = document.getElementById("status");
+        status.className = "card-value offline";
+        status.textContent = "OFFLINE";
+        document.getElementById("status-detail").textContent = "";
 
     }
 }
