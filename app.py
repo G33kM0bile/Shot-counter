@@ -10,6 +10,7 @@ Project source: https://github.com/G33kM0bile/Shot-counter
 License: MIT; see the LICENSE file in the project repository.
 """
 
+import json
 import os
 import secrets
 import sqlite3
@@ -45,6 +46,55 @@ def load_config():
 
 config = load_config()
 
+
+def load_locale(language_code):
+    if not language_code.replace("-", "").isalpha():
+        raise RuntimeError(
+            f"Invalid ui.language value: {language_code!r}"
+        )
+
+    locale_path = APP_ROOT / "locales" / f"{language_code}.json"
+
+    try:
+        with locale_path.open("r", encoding="utf-8") as f:
+            locale = json.load(f)
+    except FileNotFoundError as error:
+        raise RuntimeError(
+            f"Language pack not found: {locale_path}"
+        ) from error
+
+    if not isinstance(locale.get("meta"), dict) or not isinstance(
+        locale.get("strings"), dict
+    ):
+        raise RuntimeError(
+            f"Invalid language pack structure: {locale_path}"
+        )
+
+    return locale
+
+
+ENGLISH_LOCALE = load_locale("en")
+UI_CONFIG = config.get("ui", {})
+LANGUAGE_CODE = str(UI_CONFIG.get("language", "en")).strip().lower()
+SELECTED_LOCALE = load_locale(LANGUAGE_CODE)
+LOCALE_META = {
+    **ENGLISH_LOCALE["meta"],
+    **SELECTED_LOCALE["meta"],
+}
+TEXT = {
+    **ENGLISH_LOCALE["strings"],
+    **SELECTED_LOCALE["strings"],
+}
+
+
+def tr(key, **values):
+    template = TEXT.get(key, ENGLISH_LOCALE["strings"].get(key, key))
+
+    try:
+        return template.format(**values)
+    except (KeyError, ValueError):
+        return template
+
 TIMEZONE_NAME = config.get("timezone", "Europe/Oslo")
 LOCAL_TZ = ZoneInfo(TIMEZONE_NAME)
 os.environ["TZ"] = TIMEZONE_NAME
@@ -56,6 +106,12 @@ DB_PATH = config["database"]["path"]
 DETECTOR_NAME = config["detector"]["name"]
 RANGE_NAME = config["detector"]["range"]
 MODE = config["detector"]["mode"]
+ALLOW_SIMULATION = MODE == "simulated" or bool(
+    config.get("detector", {}).get(
+        "allow_simulation",
+        False,
+    )
+)
 UPLOAD_DIR = Path(
     config.get("uploads", {}).get(
         "incoming",
@@ -68,6 +124,14 @@ MAX_UPLOAD_BYTES = int(
         "max_bytes",
         95 * 1024 * 1024,
     )
+)
+MAX_UPLOAD_MB = max(1, MAX_UPLOAD_BYTES // (1024 * 1024))
+HTML_LANGUAGE = str(LOCALE_META.get("html_lang", LANGUAGE_CODE))
+NUMBER_LOCALE = str(LOCALE_META.get("number_locale", "en-GB"))
+DATE_FORMAT = str(LOCALE_META.get("date_format", "%Y-%m-%d"))
+PAGE_TITLE = str(UI_CONFIG.get("title", "Shot Counter"))
+FOOTER_LABEL = str(
+    UI_CONFIG.get("footer_label", tr("app.footer_label"))
 )
 ADMIN_PIN = str(config.get("admin", {}).get("pin", ""))
 PRIVACY_MODE_HOURS = int(
@@ -226,6 +290,10 @@ def format_local(timestamp):
     return dt.astimezone(LOCAL_TZ)
 
 
+def format_date(value):
+    return value.strftime(DATE_FORMAT)
+
+
 def privacy_cutoff():
     with db_connect() as conn:
         row = conn.execute(
@@ -248,7 +316,7 @@ def privacy_cutoff_payload(cutoff):
 
     return {
         "iso": dt.isoformat(),
-        "date": dt.strftime("%d.%m.%Y"),
+        "date": format_date(dt),
         "time": dt.strftime("%H:%M"),
     }
 
@@ -258,7 +326,7 @@ def deadline_payload(timestamp):
 
     return {
         "iso": dt.isoformat(),
-        "date": dt.strftime("%d.%m.%Y"),
+        "date": format_date(dt),
         "time": dt.strftime("%H:%M"),
     }
 
@@ -428,6 +496,15 @@ def valid_admin_pin():
     )
 
 
+def valid_admin_action(expected):
+    action = request.headers.get("X-Shot-Counter-Action")
+
+    if action is None:
+        action = request.headers.get("X-LSSK-Action")
+
+    return action == expected and valid_admin_pin()
+
+
 def record_privacy_reset():
     reset_at = datetime.now(timezone.utc).isoformat()
 
@@ -485,7 +562,7 @@ def last_shot(cutoff=None):
     return {
         "iso": dt.isoformat(),
         "time": dt.strftime("%H:%M:%S"),
-        "date": dt.strftime("%d.%m.%Y"),
+        "date": format_date(dt),
     }
 
 
@@ -532,7 +609,7 @@ def recent_shots(limit=10, cutoff=None):
             {
                 "id": row["id"],
                 "time": dt.strftime("%H:%M:%S"),
-                "date": dt.strftime("%d.%m.%Y"),
+                "date": format_date(dt),
                 "confidence": row["confidence"],
                 "peak": row["peak"],
             }
@@ -668,7 +745,7 @@ def activity_statistics(cutoff=None):
 
         return {
             "iso": day.isoformat(),
-            "date": day.strftime("%d.%m.%Y"),
+            "date": format_date(day),
             "shots": count,
         }
 
@@ -698,7 +775,7 @@ def activity_statistics(cutoff=None):
         "last_activity_day": (
             {
                 "iso": last_activity_day.isoformat(),
-                "date": last_activity_day.strftime("%d.%m.%Y"),
+                "date": format_date(last_activity_day),
             }
             if last_activity_day
             else None
@@ -724,14 +801,12 @@ def queue_audio_upload(audio_file):
     filename = secure_filename(audio_file.filename or "")
 
     if not filename:
-        raise ValueError("Velg en lydfil som skal lastes opp.")
+        raise ValueError(tr("api.choose_audio_file"))
 
     extension = Path(filename).suffix.lower()
 
     if extension not in ALLOWED_AUDIO_EXTENSIONS:
-        raise ValueError(
-            "Filtypen støttes ikke. Bruk WAV, M4A, MP3 eller AAC."
-        )
+        raise ValueError(tr("api.unsupported_audio_type"))
 
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     temporary = UPLOAD_DIR / f".uploading-{uuid4().hex}.part"
@@ -740,7 +815,7 @@ def queue_audio_upload(audio_file):
         audio_file.save(temporary)
 
         if temporary.stat().st_size == 0:
-            raise ValueError("Lydfilen er tom.")
+            raise ValueError(tr("api.empty_audio_file"))
 
         os.chmod(temporary, 0o664)
         destination = unique_upload_destination(filename)
@@ -753,7 +828,7 @@ def queue_audio_upload(audio_file):
 
 HTML = """
 <!DOCTYPE html>
-<html lang="no">
+<html lang="{{ html_language }}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -761,7 +836,7 @@ HTML = """
 <link rel="icon" type="image/png" href="/static/favicon.png">
 <link rel="apple-touch-icon" href="/static/favicon.png">
 
-<title>Shot Counter</title>
+<title>{{ page_title }}</title>
 
 <style>
     * {
@@ -1142,16 +1217,16 @@ HTML = """
 <div class="container">
 
 <header>
-    <h1>Shot Counter</h1>
+    <h1>{{ page_title }}</h1>
     <div class="subtitle">
-        Proof of Concept
+        {{ tr("app.subtitle") }}
     </div>
 </header>
 
 
 <div class="counter">
 
-    <div class="experimental-ribbon">Experimental</div>
+    <div class="experimental-ribbon">{{ tr("app.experimental") }}</div>
 
     <div
         id="shots-total"
@@ -1160,98 +1235,98 @@ HTML = """
     </div>
 
     <div class="counter-label">
-        TOTALT REGISTRERT
+        {{ tr("app.total_registered") }}
     </div>
 
     <button
         onclick="simulateShot()"
         id="simulate-button">
-        Simuler skudd
+        {{ tr("app.simulate_shot") }}
     </button>
 
 </div>
 
 
-<div class="section-title">Aktivitet</div>
+<div class="section-title">{{ tr("section.activity") }}</div>
 
 <div class="grid period-grid">
 
     <div class="card">
-        <div class="card-label">I dag</div>
+        <div class="card-label">{{ tr("period.today") }}</div>
         <div id="shots-today" class="card-value">-</div>
     </div>
 
     <div class="card">
-        <div class="card-label">I går</div>
+        <div class="card-label">{{ tr("period.yesterday") }}</div>
         <div id="shots-yesterday" class="card-value">-</div>
     </div>
 
     <div class="card">
-        <div class="card-label">Siste uken</div>
+        <div class="card-label">{{ tr("period.last_week") }}</div>
         <div id="shots-7-days" class="card-value">-</div>
     </div>
 
     <div class="card">
-        <div class="card-label">Siste måneden</div>
+        <div class="card-label">{{ tr("period.last_month") }}</div>
         <div id="shots-30-days" class="card-value">-</div>
     </div>
 
     <div class="card">
-        <div class="card-label">Siste året</div>
+        <div class="card-label">{{ tr("period.last_year") }}</div>
         <div id="shots-365-days" class="card-value">-</div>
     </div>
 
     <div class="card">
-        <div class="card-label">Dette kalenderåret</div>
+        <div class="card-label">{{ tr("period.calendar_year") }}</div>
         <div id="shots-calendar-year" class="card-value">-</div>
     </div>
 
 </div>
 
 
-<div class="section-title">Statistikk</div>
+<div class="section-title">{{ tr("section.statistics") }}</div>
 
 <div class="grid statistics-grid">
 
     <div class="card">
-        <div class="card-label">Aktive dager siste 30 dager</div>
+        <div class="card-label">{{ tr("statistics.active_days_30") }}</div>
         <div id="active-days-30" class="card-value">-</div>
     </div>
 
     <div class="card">
-        <div class="card-label">Snitt per aktiv dag</div>
+        <div class="card-label">{{ tr("statistics.average_active_day") }}</div>
         <div id="average-active-day" class="card-value">-</div>
-        <div class="card-detail">Siste 30 dager</div>
+        <div class="card-detail">{{ tr("statistics.last_30_days") }}</div>
     </div>
 
     <div class="card">
-        <div class="card-label">Mest aktive dag</div>
+        <div class="card-label">{{ tr("statistics.most_active_day") }}</div>
         <div id="most-active-day-date" class="card-value">-</div>
         <div id="most-active-day-shots" class="card-detail">-</div>
     </div>
 
     <div class="card">
-        <div class="card-label">Rekorddag</div>
+        <div class="card-label">{{ tr("statistics.record_day") }}</div>
         <div id="record-day-date" class="card-value">-</div>
         <div id="record-day-shots" class="card-detail">-</div>
     </div>
 
     <div class="card">
-        <div class="card-label">Siste aktivitetsdag</div>
+        <div class="card-label">{{ tr("statistics.last_activity_day") }}</div>
         <div id="last-activity-day" class="card-value">-</div>
     </div>
 
 </div>
 
 
-<div class="section-title">System</div>
+<div class="section-title">{{ tr("section.system") }}</div>
 
 
 <div class="grid">
 
     <div class="card">
         <div class="card-label">
-            Status
+            {{ tr("system.status") }}
         </div>
 
         <div
@@ -1267,7 +1342,7 @@ HTML = """
 
     <div class="card">
         <div class="card-label">
-            Siste skudd
+            {{ tr("system.last_shot") }}
         </div>
 
         <div
@@ -1280,7 +1355,7 @@ HTML = """
 
     <div class="card">
         <div class="card-label">
-            Modus
+            {{ tr("system.mode") }}
         </div>
 
         <div
@@ -1293,7 +1368,7 @@ HTML = """
 
     <div class="card">
         <div class="card-label">
-            Venter på opplasting
+            {{ tr("system.queued_uploads") }}
         </div>
 
         <div
@@ -1309,17 +1384,17 @@ HTML = """
 <div class="table-card">
 
     <div class="table-title">
-        Siste registreringer
+        {{ tr("recent.title") }}
     </div>
 
     <table>
 
         <thead>
         <tr>
-            <th>Tid</th>
-            <th>Dato</th>
-            <th>Confidence</th>
-            <th>Peak</th>
+            <th>{{ tr("recent.time") }}</th>
+            <th>{{ tr("recent.date") }}</th>
+            <th>{{ tr("recent.confidence") }}</th>
+            <th>{{ tr("recent.peak") }}</th>
         </tr>
         </thead>
 
@@ -1331,13 +1406,13 @@ HTML = """
 </div>
 
 
-<div class="section-title">Last opp lydfil</div>
+<div class="section-title">{{ tr("upload.section") }}</div>
 
 <div class="upload-card">
     <p class="upload-description">
-        Last opp et lydopptak – det blir automatisk analysert og lagt til i statistikken.
+        {{ tr("upload.description") }}
         <br>
-        Støttede formater: WAV, M4A, MP3 og AAC. Maks 95 MB.
+        {{ tr("upload.formats", max_mb=max_upload_mb) }}
     </p>
 
     <form id="upload-form" class="upload-form">
@@ -1349,7 +1424,7 @@ HTML = """
             required>
 
         <button id="upload-button" type="submit">
-            Last opp og behandle
+            {{ tr("upload.button") }}
         </button>
     </form>
 
@@ -1361,11 +1436,11 @@ HTML = """
 </div>
 
 
-<div class="section-title">Personvern</div>
+<div class="section-title">{{ tr("privacy.section") }}</div>
 
 <div class="privacy-card">
     <div class="admin-pin-row">
-        <label for="admin-pin">Admin-PIN</label>
+        <label for="admin-pin">{{ tr("privacy.admin_pin") }}</label>
         <input
             id="admin-pin"
             type="password"
@@ -1377,20 +1452,22 @@ HTML = """
     <div class="privacy-controls">
         <div class="privacy-control">
             <div class="privacy-control-heading">
-                <strong>Skjul korttidsaktivitet</strong>
+                <strong>{{ tr("privacy.hide.title") }}</strong>
                 <button
                     id="privacy-mode-button"
                     class="toggle-button"
                     type="button"
                     aria-pressed="false">
-                    Av
+                    {{ tr("common.off") }}
                 </button>
             </div>
             <p class="privacy-control-description">
-                Nye registreringer lagres, men skjules permanent fra
-                korttids- og datovisninger. Samlet aktivitet publiseres
-                i måneds-, års- og totaltall etter 24–48 timer. Modusen
-                slås automatisk av etter 6 timer.
+                {{ tr(
+                    "privacy.hide.description",
+                    min_hours=privacy_publish_min_hours,
+                    max_hours=privacy_publish_max_hours,
+                    mode_hours=privacy_mode_hours
+                ) }}
             </p>
             <div
                 id="privacy-mode-status"
@@ -1401,19 +1478,20 @@ HTML = """
 
         <div class="privacy-control">
             <div class="privacy-control-heading">
-                <strong>Stopp registrering</strong>
+                <strong>{{ tr("privacy.pause.title") }}</strong>
                 <button
                     id="registration-pause-button"
                     class="toggle-button danger"
                     type="button"
                     aria-pressed="false">
-                    Av
+                    {{ tr("common.off") }}
                 </button>
             </div>
             <p class="privacy-control-description">
-                Avviser nye nettleseropplastinger og setter behandling
-                av køen på pause. Registrering starter automatisk igjen
-                etter 24 timer.
+                {{ tr(
+                    "privacy.pause.description",
+                    pause_hours=registration_pause_hours
+                ) }}
             </p>
             <div
                 id="registration-pause-status"
@@ -1424,14 +1502,13 @@ HTML = """
 
         <div class="privacy-control">
             <div class="privacy-control-heading">
-                <strong>Nullstill korttidsvisningen</strong>
+                <strong>{{ tr("privacy.reset.title") }}</strong>
                 <button id="privacy-reset-button" type="button">
-                    Nullstill
+                    {{ tr("privacy.reset.button") }}
                 </button>
             </div>
             <p class="privacy-control-description">
-                Nullstill korttidsvisningen. Måneds-, års- og totaltall
-                beholdes.
+                {{ tr("privacy.reset.description") }}
             </p>
             <div
                 id="privacy-reset-status"
@@ -1445,13 +1522,10 @@ HTML = """
 
 <div class="footer">
     <div class="range-tool-caveat">
-        Dette er et eksperimentelt verktøy for læring og uformell
-        statistikk. Det kan telle feil og er ikke en offisiell
-        skuddlogg. Skal ikke brukes som sikkerhetssystem eller som
-        grunnlag for kontroll, fakturering eller myndighetskrav.
+        {{ tr("disclaimer.text") }}
     </div>
     <div>
-        Automatisk skuddteller ·
+        {{ footer_label }} ·
         <a
             href="https://github.com/G33kM0bile/Shot-counter"
             target="_blank"
@@ -1466,12 +1540,35 @@ HTML = """
 
 <script>
 
+const uiText = {{ text | tojson }};
+const uiConfig = {
+    privacyModeHours: {{ privacy_mode_hours }},
+    registrationPauseHours: {{ registration_pause_hours }}
+};
+
+function translate(key, values = {}) {
+    const template = uiText[key] || key;
+
+    return template.replace(
+        /\\{([a-zA-Z0-9_]+)\\}/g,
+        (match, name) =>
+            Object.prototype.hasOwnProperty.call(values, name)
+                ? String(values[name])
+                : match
+    );
+}
+
+function translatedValue(prefix, value) {
+    const key = `${prefix}.${value}`;
+    return uiText[key] || String(value).toUpperCase();
+}
+
 const numberFormatter =
-    new Intl.NumberFormat("nb-NO");
+    new Intl.NumberFormat({{ number_locale | tojson }});
 
 const decimalFormatter =
     new Intl.NumberFormat(
-        "nb-NO",
+        {{ number_locale | tojson }},
         {
             minimumFractionDigits: 0,
             maximumFractionDigits: 1
@@ -1486,13 +1583,16 @@ function showDayStat(dateId, shotsId, stat) {
     document.getElementById(
         dateId
     ).textContent =
-        stat ? stat.date : "Ingen aktivitet";
+        stat ? stat.date : translate("common.no_activity");
 
     document.getElementById(
         shotsId
     ).textContent =
         stat
-            ? `${numberFormatter.format(stat.shots)} skudd`
+            ? translate(
+                "common.shots_count",
+                {count: numberFormatter.format(stat.shots)}
+            )
             : "";
 }
 
@@ -1519,7 +1619,7 @@ function readAdminPin(status) {
 
     if (!pin) {
         status.className = "privacy-status error";
-        status.textContent = "Skriv inn admin-PIN.";
+        status.textContent = translate("admin.pin_required");
         input.focus();
         return null;
     }
@@ -1531,7 +1631,9 @@ function setToggleState(button, active) {
 
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
-    button.textContent = active ? "På" : "Av";
+    button.textContent = active
+        ? translate("common.on")
+        : translate("common.off");
 }
 
 async function togglePrivacyMode() {
@@ -1551,8 +1653,11 @@ async function togglePrivacyMode() {
 
     const confirmed = window.confirm(
         enabled
-            ? "Skjul korttidsaktivitet i inntil 6 timer?"
-            : "Avslutt skjuling av korttidsaktivitet?"
+            ? translate(
+                "privacy.enable_confirm",
+                {hours: uiConfig.privacyModeHours}
+            )
+            : translate("privacy.disable_confirm")
     );
 
     if (!confirmed) {
@@ -1561,7 +1666,7 @@ async function togglePrivacyMode() {
 
     button.disabled = true;
     status.className = "privacy-status";
-    status.textContent = "Oppdaterer …";
+    status.textContent = translate("common.updating");
 
     try {
         const response = await fetch(
@@ -1575,7 +1680,9 @@ async function togglePrivacyMode() {
         const data = await response.json();
 
         if (!response.ok) {
-            throw new Error(data.error || "Endringen mislyktes.");
+            throw new Error(
+                data.error || translate("common.change_failed")
+            );
         }
 
         status.className = "privacy-status success";
@@ -1583,7 +1690,8 @@ async function togglePrivacyMode() {
         await updateDashboard();
     } catch (error) {
         status.className = "privacy-status error";
-        status.textContent = error.message || "Endringen mislyktes.";
+        status.textContent =
+            error.message || translate("common.change_failed");
     } finally {
         button.disabled = false;
     }
@@ -1606,8 +1714,11 @@ async function toggleRegistrationPause() {
 
     const confirmed = window.confirm(
         enabled
-            ? "Stopp registrering og opplasting i inntil 24 timer?"
-            : "Start registrering igjen nå?"
+            ? translate(
+                "registration.enable_confirm",
+                {hours: uiConfig.registrationPauseHours}
+            )
+            : translate("registration.disable_confirm")
     );
 
     if (!confirmed) {
@@ -1616,7 +1727,7 @@ async function toggleRegistrationPause() {
 
     button.disabled = true;
     status.className = "privacy-status";
-    status.textContent = "Oppdaterer …";
+    status.textContent = translate("common.updating");
 
     try {
         const response = await fetch(
@@ -1630,7 +1741,9 @@ async function toggleRegistrationPause() {
         const data = await response.json();
 
         if (!response.ok) {
-            throw new Error(data.error || "Endringen mislyktes.");
+            throw new Error(
+                data.error || translate("common.change_failed")
+            );
         }
 
         status.className = "privacy-status success";
@@ -1638,7 +1751,8 @@ async function toggleRegistrationPause() {
         await updateDashboard();
     } catch (error) {
         status.className = "privacy-status error";
-        status.textContent = error.message || "Endringen mislyktes.";
+        status.textContent =
+            error.message || translate("common.change_failed");
     } finally {
         button.disabled = false;
     }
@@ -1657,7 +1771,7 @@ function uploadAudio(event) {
 
     if (!input.files.length) {
         status.className = "upload-status error";
-        status.textContent = "Velg en lydfil først.";
+        status.textContent = translate("upload.choose_file");
         return;
     }
 
@@ -1669,7 +1783,7 @@ function uploadAudio(event) {
     button.disabled = true;
     button.dataset.uploading = "true";
     status.className = "upload-status";
-    status.textContent = "Starter opplasting …";
+    status.textContent = translate("upload.starting");
 
     upload.upload.addEventListener(
         "progress",
@@ -1679,7 +1793,7 @@ function uploadAudio(event) {
                     progress.loaded / progress.total * 100
                 );
                 status.textContent =
-                    `Laster opp … ${percent} %`;
+                    translate("upload.progress", {percent});
             }
         }
     );
@@ -1699,13 +1813,13 @@ function uploadAudio(event) {
                 status.className = "upload-status success";
                 status.textContent =
                     response.message ||
-                    "Filen er lastet opp og står i behandlingskø.";
+                    translate("upload.queued");
                 input.value = "";
             } else {
                 status.className = "upload-status error";
                 status.textContent =
                     response.error ||
-                    "Opplastingen mislyktes. Prøv igjen.";
+                    translate("upload.failed");
             }
 
             button.disabled = false;
@@ -1718,7 +1832,7 @@ function uploadAudio(event) {
         () => {
             status.className = "upload-status error";
             status.textContent =
-                "Kunne ikke kontakte serveren. Prøv igjen.";
+                translate("upload.server_unreachable");
             button.disabled = false;
             delete button.dataset.uploading;
         }
@@ -1731,7 +1845,7 @@ function uploadAudio(event) {
 async function resetPrivacyDisplay() {
 
     const confirmed = window.confirm(
-        "Nullstill korttidsvisningen? Ingen registrerte skudd blir slettet."
+        translate("reset.confirm")
     );
 
     if (!confirmed) {
@@ -1750,7 +1864,7 @@ async function resetPrivacyDisplay() {
 
     button.disabled = true;
     status.className = "privacy-status";
-    status.textContent = "Nullstiller …";
+    status.textContent = translate("reset.resetting");
 
     try {
         const response = await fetch(
@@ -1764,7 +1878,7 @@ async function resetPrivacyDisplay() {
 
         if (!response.ok) {
             throw new Error(
-                data.error || "Nullstillingen mislyktes."
+                data.error || translate("reset.failed")
             );
         }
 
@@ -1774,7 +1888,7 @@ async function resetPrivacyDisplay() {
     } catch (error) {
         status.className = "privacy-status error";
         status.textContent =
-            error.message || "Nullstillingen mislyktes.";
+            error.message || translate("reset.failed");
     } finally {
         button.disabled = false;
     }
@@ -1832,7 +1946,10 @@ async function updateDashboard() {
         document.getElementById(
             "active-days-30"
         ).textContent =
-            `${stats.active_days_30} av 30`;
+            translate(
+                "statistics.active_days_count",
+                {count: stats.active_days_30}
+            );
 
         document.getElementById(
             "average-active-day"
@@ -1858,22 +1975,22 @@ async function updateDashboard() {
         ).textContent =
             stats.last_activity_day
                 ? stats.last_activity_day.date
-                : "Ingen aktivitet";
+                : translate("common.no_activity");
 
         document.getElementById(
             "status"
         ).textContent =
-            data.status.toUpperCase();
+            translatedValue("status", data.status);
 
         document.getElementById(
             "mode"
         ).textContent =
-            data.mode;
+            translatedValue("mode", data.mode);
 
         document.getElementById(
             "simulate-button"
         ).hidden =
-            data.mode !== "simulated";
+            !data.allow_simulation;
 
         document.getElementById(
             "queued"
@@ -1896,12 +2013,17 @@ async function updateDashboard() {
             privacyModeStatus.className =
                 "privacy-status success";
             privacyModeStatus.textContent =
-                `Aktiv til ${privacyMode.ends_at.date} ` +
-                `kl. ${privacyMode.ends_at.time}.`;
+                translate(
+                    "privacy.active_until",
+                    {
+                        date: privacyMode.ends_at.date,
+                        time: privacyMode.ends_at.time
+                    }
+                );
         } else if (!privacyModeStatus.classList.contains("error")) {
             privacyModeStatus.className = "privacy-status";
             privacyModeStatus.textContent =
-                "Skjuling av korttidsaktivitet er av.";
+                translate("privacy.inactive");
         }
 
         const registrationPause =
@@ -1921,9 +2043,13 @@ async function updateDashboard() {
             registrationPauseStatus.className =
                 "privacy-status error";
             registrationPauseStatus.textContent =
-                `Registrering er stoppet til ` +
-                `${registrationPause.ends_at.date} ` +
-                `kl. ${registrationPause.ends_at.time}.`;
+                translate(
+                    "registration.paused_until",
+                    {
+                        date: registrationPause.ends_at.date,
+                        time: registrationPause.ends_at.time
+                    }
+                );
         } else if (
             registrationPauseStatus.dataset.modeState === "active"
             || !registrationPauseStatus.classList.contains("error")
@@ -1931,7 +2057,7 @@ async function updateDashboard() {
             delete registrationPauseStatus.dataset.modeState;
             registrationPauseStatus.className = "privacy-status";
             registrationPauseStatus.textContent =
-                "Registrering er aktiv.";
+                translate("registration.active");
         }
 
         const systemStatus =
@@ -1943,28 +2069,44 @@ async function updateDashboard() {
         systemStatus.className = "card-value";
 
         if (registrationPause.active) {
-            systemStatus.textContent = "PAUSE";
+            systemStatus.textContent = translate("status.pause");
             systemStatus.classList.add("status-warning");
             statusDetails.push(
-                `Registrering til ${registrationPause.ends_at.date} ` +
-                `kl. ${registrationPause.ends_at.time}`
+                translate(
+                    "registration.system_until",
+                    {
+                        date: registrationPause.ends_at.date,
+                        time: registrationPause.ends_at.time
+                    }
+                )
             );
 
             if (privacyMode.active) {
                 statusDetails.push(
-                    `Personvern til ${privacyMode.ends_at.date} ` +
-                    `kl. ${privacyMode.ends_at.time}`
+                    translate(
+                        "privacy.system_until",
+                        {
+                            date: privacyMode.ends_at.date,
+                            time: privacyMode.ends_at.time
+                        }
+                    )
                 );
             }
         } else if (privacyMode.active) {
-            systemStatus.textContent = "PERSONVERN";
+            systemStatus.textContent = translate("status.privacy");
             systemStatus.classList.add("status-warning");
             statusDetails.push(
-                `Til ${privacyMode.ends_at.date} ` +
-                `kl. ${privacyMode.ends_at.time}`
+                translate(
+                    "privacy.system_until",
+                    {
+                        date: privacyMode.ends_at.date,
+                        time: privacyMode.ends_at.time
+                    }
+                )
             );
         } else {
-            systemStatus.textContent = data.status.toUpperCase();
+            systemStatus.textContent =
+                translatedValue("status", data.status);
             systemStatus.classList.add("online");
         }
 
@@ -1985,7 +2127,7 @@ async function updateDashboard() {
         if (registrationPause.active) {
             uploadStatus.className = "upload-status error";
             uploadStatus.textContent =
-                "Opplasting er deaktivert mens registrering er stoppet.";
+                translate("upload.disabled_paused");
             uploadStatus.dataset.pauseMessage = "true";
         } else if (uploadStatus.dataset.pauseMessage === "true") {
             uploadStatus.className = "upload-status";
@@ -2002,11 +2144,16 @@ async function updateDashboard() {
 
         if (data.privacy_reset) {
             privacyStatus.textContent =
-                `Sist nullstilt ${data.privacy_reset.date} ` +
-                `kl. ${data.privacy_reset.time}`;
+                translate(
+                    "reset.last_at",
+                    {
+                        date: data.privacy_reset.date,
+                        time: data.privacy_reset.time
+                    }
+                );
         } else if (!privacyStatus.classList.contains("success")) {
             privacyStatus.textContent =
-                "Korttidsvisningen er ikke nullstilt.";
+                translate("reset.never");
         }
 
         if (data.last_shot) {
@@ -2018,7 +2165,7 @@ async function updateDashboard() {
             document.getElementById(
                 "last-shot"
             ).textContent =
-                "Ingen";
+                translate("common.none");
         }
 
 
@@ -2048,7 +2195,7 @@ async function updateDashboard() {
 
         const status = document.getElementById("status");
         status.className = "card-value offline";
-        status.textContent = "OFFLINE";
+        status.textContent = translate("status.offline");
         document.getElementById("status-detail").textContent = "";
 
     }
@@ -2112,7 +2259,20 @@ setInterval(
 
 @app.route("/")
 def dashboard():
-    return render_template_string(HTML)
+    return render_template_string(
+        HTML,
+        footer_label=FOOTER_LABEL,
+        html_language=HTML_LANGUAGE,
+        max_upload_mb=MAX_UPLOAD_MB,
+        number_locale=NUMBER_LOCALE,
+        page_title=PAGE_TITLE,
+        privacy_mode_hours=PRIVACY_MODE_HOURS,
+        privacy_publish_max_hours=PRIVACY_PUBLISH_MAX_HOURS,
+        privacy_publish_min_hours=PRIVACY_PUBLISH_MIN_HOURS,
+        registration_pause_hours=REGISTRATION_PAUSE_HOURS,
+        text=TEXT,
+        tr=tr,
+    )
 
 
 @app.route("/favicon.ico")
@@ -2157,6 +2317,7 @@ def api_status():
             "queued_uploads": queued_count(),
             "last_shot": last_shot(cutoff),
             "mode": MODE,
+            "allow_simulation": ALLOW_SIMULATION,
             "recent": recent_shots(10, cutoff),
             "statistics": statistics,
             "privacy_reset": privacy_cutoff_payload(cutoff),
@@ -2172,15 +2333,15 @@ def simulate_shot():
         return jsonify(
             {
                 "ok": False,
-                "error": "Registrering er satt på pause.",
+                "error": tr("api.registration_paused"),
             }
         ), 423
 
-    if MODE != "simulated":
+    if not ALLOW_SIMULATION:
         return jsonify(
             {
                 "ok": False,
-                "error": "Simulering er deaktivert.",
+                "error": tr("api.simulation_disabled"),
             }
         ), 403
 
@@ -2203,7 +2364,7 @@ def api_upload():
         return jsonify(
             {
                 "ok": False,
-                "error": "Registrering er satt på pause. Opplasting er deaktivert.",
+                "error": tr("api.upload_disabled"),
             }
         ), 423
 
@@ -2211,7 +2372,7 @@ def api_upload():
 
     if audio_file is None:
         return jsonify(
-            {"ok": False, "error": "Velg en lydfil som skal lastes opp."}
+            {"ok": False, "error": tr("api.choose_audio_file")}
         ), 400
 
     try:
@@ -2225,21 +2386,18 @@ def api_upload():
         {
             "ok": True,
             "filename": destination.name,
-            "message": "Filen er lastet opp og står i behandlingskø.",
+            "message": tr("api.upload_queued"),
         }
     ), 202
 
 
 @app.route("/api/privacy-reset", methods=["POST"])
 def api_privacy_reset():
-    if (
-        request.headers.get("X-Shot-Counter-Action")
-        != "privacy-reset"
-    ) or not valid_admin_pin():
+    if not valid_admin_action("privacy-reset"):
         return jsonify(
             {
                 "ok": False,
-                "error": "Ugyldig PIN eller forespørsel.",
+                "error": tr("api.invalid_admin"),
             }
         ), 403
 
@@ -2249,19 +2407,16 @@ def api_privacy_reset():
         {
             "ok": True,
             "privacy_reset": privacy_cutoff_payload(cutoff),
-            "message": "Korttidsvisningen er nullstilt.",
+            "message": tr("api.reset_done"),
         }
     )
 
 
 @app.route("/api/privacy-mode", methods=["POST"])
 def api_privacy_mode():
-    if (
-        request.headers.get("X-Shot-Counter-Action")
-        != "privacy-mode"
-    ) or not valid_admin_pin():
+    if not valid_admin_action("privacy-mode"):
         return jsonify(
-            {"ok": False, "error": "Ugyldig PIN eller forespørsel."}
+            {"ok": False, "error": tr("api.invalid_admin")}
         ), 403
 
     payload = request.get_json(silent=True) or {}
@@ -2269,7 +2424,7 @@ def api_privacy_mode():
 
     if not isinstance(enabled, bool):
         return jsonify(
-            {"ok": False, "error": "Ugyldig modusverdi."}
+            {"ok": False, "error": tr("api.invalid_mode")}
         ), 400
 
     state = set_privacy_mode(enabled)
@@ -2279,9 +2434,9 @@ def api_privacy_mode():
             "ok": True,
             "privacy_mode": state,
             "message": (
-                "Korttidsaktivitet skjules."
+                tr("api.privacy_enabled")
                 if state["active"]
-                else "Skjuling av korttidsaktivitet er avsluttet."
+                else tr("api.privacy_disabled")
             ),
         }
     )
@@ -2289,12 +2444,9 @@ def api_privacy_mode():
 
 @app.route("/api/registration-pause", methods=["POST"])
 def api_registration_pause():
-    if (
-        request.headers.get("X-Shot-Counter-Action")
-        != "registration-pause"
-    ) or not valid_admin_pin():
+    if not valid_admin_action("registration-pause"):
         return jsonify(
-            {"ok": False, "error": "Ugyldig PIN eller forespørsel."}
+            {"ok": False, "error": tr("api.invalid_admin")}
         ), 403
 
     payload = request.get_json(silent=True) or {}
@@ -2302,7 +2454,7 @@ def api_registration_pause():
 
     if not isinstance(enabled, bool):
         return jsonify(
-            {"ok": False, "error": "Ugyldig modusverdi."}
+            {"ok": False, "error": tr("api.invalid_mode")}
         ), 400
 
     state = set_registration_pause(enabled)
@@ -2312,9 +2464,9 @@ def api_registration_pause():
             "ok": True,
             "registration_pause": state,
             "message": (
-                "Registrering er satt på pause."
+                tr("api.registration_paused_done")
                 if state["active"]
-                else "Registrering er startet igjen."
+                else tr("api.registration_resumed")
             ),
         }
     )
@@ -2325,7 +2477,7 @@ def upload_too_large(error):
     return jsonify(
         {
             "ok": False,
-            "error": "Filen er for stor. Maksimal størrelse er 95 MB.",
+            "error": tr("api.file_too_large", max_mb=MAX_UPLOAD_MB),
         }
     ), 413
 

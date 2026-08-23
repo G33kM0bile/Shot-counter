@@ -1,10 +1,19 @@
 timezone: Europe/Oslo
 
+ui:
+  # Built-in language packs: "en" and "nb" (Norwegian Bokmål).
+  language: en
+  title: Shot Counter
+  # Optional text shown beside the GitHub link in the footer.
+  footer_label: Automatic shot counter
+
 detector:
   name: range-detector-01
   range: main-range
   # Use "uploaded" for real audio files or "simulated" for a demo shot every 30 seconds.
   mode: uploaded
+  # Keep false for real installations. This may be true independently of mode for a PoC.
+  allow_simulation: false
 
 database:
   path: /var/lib/shot-counter/shots.db

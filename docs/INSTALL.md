@@ -63,7 +63,7 @@ getent passwd shot-counter
 
 ## 3. Download the application
 
-The repository is private, so authenticate with GitHub using your normal Git credentials or an SSH deploy key. Do not put an access token in shell history or in this repository.
+The repository is public, so no GitHub authentication is required for this clone. Do not put access tokens or other credentials in shell history or in this repository.
 
 ```bash
 sudo git clone \
@@ -104,15 +104,19 @@ sudoedit /opt/shot-counter/config.yaml
 At minimum, review:
 
 - `timezone`
+- `ui.language` (`en` or `nb`) and the optional branding under `ui`
 - `detector.name`
 - `detector.range`
 - `detector.mode`
+- `detector.allow_simulation` (normally keep this `false`)
 - `admin.pin` (replace the example value)
 - the durations under `privacy`
 - all database and upload paths
 - the audio detection parameters under `processing`
 
 Start with `detector.mode: uploaded` for real recordings. The defaults reproduce the original proof-of-concept detector and are not universal calibration values.
+
+English is the default interface language. Set `ui.language: nb` for Norwegian Bokmål. Additional languages can be added by copying `locales/en.json`, translating the values under `strings`, and selecting the new filename (without `.json`) in `ui.language`. Any missing translation key falls back to English.
 
 ## 6. Perform a local application test
 

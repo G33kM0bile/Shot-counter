@@ -13,6 +13,7 @@ An offline-first shot-counting proof of concept for shooting ranges. It accepts 
 - Recording timestamps from embedded metadata, with filesystem time as a fallback.
 - Dashboard counters for today, yesterday, the last week, month, and year, plus the current calendar year and total.
 - Activity-aware statistics such as active days, average per active day, the recent busiest day, the all-time record day, and the last activity day.
+- Configurable English or Norwegian Bokmål dashboard language, with external JSON language packs and English fallback strings.
 - PIN-protected privacy controls: short-term suppression, delayed aggregate publication, a 24-hour registration pause, and a manual soft reset.
 - Automatic expiry and an amber dashboard state for active privacy controls.
 - `robots.txt`, `bots.txt`, and `X-Robots-Tag` responses that ask crawlers not to index the site.
@@ -67,6 +68,7 @@ Browser upload or local file transfer
 ```
 
 - `app.py` provides the Flask dashboard, JSON API, upload endpoint, statistics, and privacy controls.
+- `locales/` contains the external dashboard language packs. English (`en`) is the default and Norwegian Bokmål uses `nb`.
 - `upload_processor.py` watches for completed audio files, honors registration pauses, normalizes audio, writes detections, and moves originals to `processed/` or `failed/`.
 - `config.example.yaml` documents paths, identity, timezone, server settings, and detector parameters.
 - `deploy/systemd/` contains service units for Debian-based systems.
@@ -94,11 +96,24 @@ venv/bin/python app.py
 
 The example configuration uses system paths intended for the full Debian installation. Change the database, upload, and processing paths before running it as an unprivileged user. Start `venv/bin/python upload_processor.py` in a second terminal if you also want uploaded files to be analyzed.
 
+## Dashboard language
+
+Set the interface language in `config.yaml`:
+
+```yaml
+ui:
+  language: en
+  title: Shot Counter
+  footer_label: Automatic shot counter
+```
+
+Use `language: nb` for Norwegian Bokmål. To add another language, copy `locales/en.json` to a file named after the new language code, translate its `strings`, set the locale metadata, and select that code under `ui.language`. Missing keys in a selected language pack fall back to English. Restart `shot-counter.service` after changing the language or branding.
+
 ## Operating modes
 
 Implemented:
 
-- `uploaded`: process uploaded recordings; the simulation endpoint is disabled.
+- `uploaded`: process uploaded recordings; the simulation endpoint is disabled unless `detector.allow_simulation` is explicitly enabled for a proof of concept.
 - `simulated`: add a test detection every 30 seconds and expose the dashboard's simulation button.
 
 Planned:
@@ -120,7 +135,7 @@ Use `simulated` only for an isolated demonstration. Never leave it enabled when 
 
 ## Deployment and security
 
-The included upload endpoint is intentionally simple and has no user authentication. Administrative privacy actions require the PIN configured under `admin.pin`, but this proof-of-concept PIN has no rate limiting and is not a replacement for proper authentication. `robots.txt` and `bots.txt` are crawler requests, not access controls.
+The included upload endpoint is intentionally simple and has no user authentication. Administrative privacy actions require the PIN configured under `admin.pin`, but this proof-of-concept PIN has no rate limiting and is not a replacement for proper authentication. When `detector.allow_simulation` is enabled, the public simulation button and endpoint can add test detections. `robots.txt` and `bots.txt` are crawler requests, not access controls.
 
 Before exposing an installation publicly:
 
@@ -135,7 +150,7 @@ Before exposing an installation publicly:
 
 - The detector may count non-shot impulses and miss quieter shots.
 - Different firearms and room acoustics require calibration data.
-- The application currently embeds the Norwegian dashboard template in `app.py`.
+- A language change requires an application restart; language selection is installation-wide rather than per browser.
 - The built-in Flask server is suitable for this proof of concept, but a production deployment should use a hardened WSGI server and authenticated administrative routes.
 
 ## Data that must not be committed
