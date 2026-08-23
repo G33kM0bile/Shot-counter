@@ -107,6 +107,17 @@ Planned:
 
 Use `simulated` only for an isolated demonstration. Never leave it enabled when collecting real statistics.
 
+## Planned functionality
+
+- **Automatic counting at the range:** use a small Debian PC, a powered USB hub, and multiple USB microphones to capture and analyze range activity without manual uploads. Exact hardware recommendations will be added after real-world testing.
+- **Multi-microphone event fusion:** process microphones independently, then cluster matching detections so a shot heard by several microphones is counted once.
+- **Offline-first historical synchronization:** keep SQLite as the local source of truth and queue outbound synchronization while offline. When connectivity is available, publish time-series aggregates to InfluxDB for long-term Grafana dashboards without requiring inbound firewall ports.
+- **Live counters on the club website:** provide a small read-only feed or embeddable counter for the club's main website, while respecting privacy mode, delayed publication, and registration pauses.
+- **Microphone and system health:** report disconnected microphones, stalled capture, queue backlog, disk usage, and the time of the last successful analysis and synchronization.
+- **Calibration profiles:** store per-range and per-microphone detector thresholds so changes in placement, firearms, acoustics, and background noise can be tested and reproduced.
+- **Rolling audio retention:** keep only a short local recording buffer or detected-event windows, with configurable automatic cleanup to prevent continuous recording from filling the disk.
+- **Backup and export:** provide scheduled SQLite backups and simple aggregate-data export for recovery or independent analysis.
+
 ## Deployment and security
 
 The included upload endpoint is intentionally simple and has no user authentication. Administrative privacy actions require the PIN configured under `admin.pin`, but this proof-of-concept PIN has no rate limiting and is not a replacement for proper authentication. `robots.txt` and `bots.txt` are crawler requests, not access controls.
